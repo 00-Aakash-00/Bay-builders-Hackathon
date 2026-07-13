@@ -131,9 +131,7 @@ export default function MarketingPage() {
 				</div>
 			</section>
 
-			<section aria-label="Evidence flight" className="border-b border-mist">
-				<HeroWorld />
-			</section>
+			<HeroWorld />
 
 			<section
 				aria-labelledby="dead-zone-title"

@@ -6,8 +6,13 @@ import { type FormEvent, useState } from "react";
 type RunDepth = 5 | 10 | 20;
 
 function normalizeHttpUrl(value: string) {
+	const trimmedValue = value.trim();
+	const valueWithScheme = /^[a-z][a-z\d+.-]*:\/\//iu.test(trimmedValue)
+		? trimmedValue
+		: `https://${trimmedValue}`;
+
 	try {
-		const url = new URL(value.trim());
+		const url = new URL(valueWithScheme);
 		if (url.protocol !== "http:" && url.protocol !== "https:") {
 			return null;
 		}
@@ -29,7 +34,7 @@ export function RunCreationForm() {
 		const normalizedDomain = normalizeHttpUrl(domain);
 
 		if (!normalizedDomain) {
-			setError("Enter a full URL beginning with http:// or https://.");
+			setError("Enter a valid startup URL.");
 			return;
 		}
 

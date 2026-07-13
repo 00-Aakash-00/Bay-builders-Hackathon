@@ -56,6 +56,8 @@ interface LeadSeed {
 		provenanceUrl: string;
 		confidence: "high" | "medium" | "low";
 	};
+	contacts: Readonly<NonNullable<Lead["enrichment"]["contacts"]>>;
+	personContext: string;
 	whyFit: string;
 	whyNow: string;
 	caution?: string;
@@ -109,6 +111,20 @@ const LEAD_SEEDS = [
 				"https://www.reddit.com/r/SaaS/comments/cz101/founder_prospecting_routine/",
 			confidence: "high",
 		},
+		contacts: [
+			{
+				kind: "reddit",
+				value: "https://www.reddit.com/user/mayabuilds/",
+				provenanceUrl: "https://www.reddit.com/user/mayabuilds/",
+			},
+			{
+				kind: "website",
+				value: "https://northstarstudio.example",
+				provenanceUrl: "https://northstarstudio.example/about",
+			},
+		],
+		personContext:
+			"Maya Chen is the founder of Northstar Studio, a small B2B software team. In a public Reddit post, she said she spends Fridays stitching together threads to find a handful of relevant early users.",
 		whyFit:
 			"A solo SaaS founder doing manual signal discovery every week matches the core workflow.",
 		whyNow:
@@ -143,6 +159,20 @@ const LEAD_SEEDS = [
 			provenanceUrl: "https://news.ycombinator.com/user?id=owenpatch",
 			confidence: "high",
 		},
+		contacts: [
+			{
+				kind: "other",
+				value: "https://news.ycombinator.com/user?id=owenpatch",
+				provenanceUrl: "https://news.ycombinator.com/user?id=owenpatch",
+			},
+			{
+				kind: "website",
+				value: "https://patchworklabs.example",
+				provenanceUrl: "https://patchworklabs.example/about",
+			},
+		],
+		personContext:
+			"Owen Brooks co-founded Patchwork Labs, a small B2B software team that launched three weeks before his post. He said publicly that the team still could not distinguish buying signals from polite launch feedback.",
 		whyFit:
 			"A newly launched small team needs evidence triage before it can repeat founder-led sales.",
 		whyNow:
@@ -177,6 +207,20 @@ const LEAD_SEEDS = [
 			provenanceUrl: "https://foldwise.example/contact",
 			confidence: "medium",
 		},
+		contacts: [
+			{
+				kind: "public_email",
+				value: "hello@foldwise.example",
+				provenanceUrl: "https://foldwise.example/contact",
+			},
+			{
+				kind: "website",
+				value: "https://foldwise.example",
+				provenanceUrl: "https://foldwise.example/about",
+			},
+		],
+		personContext:
+			"Priya Raman is CEO of Foldwise, a small B2B software team. In a recent public competitor review, she said she wants person-level pain evidence rather than another anonymous trend chart.",
 		whyFit:
 			"The reviewer explicitly wants person-level evidence rather than aggregate market data.",
 		whyNow:
@@ -211,6 +255,15 @@ const LEAD_SEEDS = [
 			provenanceUrl: "https://github.com/docklinehq/roadmap/issues/47",
 			confidence: "high",
 		},
+		contacts: [
+			{
+				kind: "github",
+				value: "https://github.com/mateosilva-dev",
+				provenanceUrl: "https://github.com/mateosilva-dev",
+			},
+		],
+		personContext:
+			"Mateo Silva is the technical co-founder of Dockline, a small B2B software team. In a public GitHub issue, he said the team still tags feature requests by hand because a full research-ops stack is out of reach.",
 		whyFit:
 			"The team is manually processing public customer evidence with the exact lightweight constraint.",
 		whyNow:
@@ -245,6 +298,20 @@ const LEAD_SEEDS = [
 			provenanceUrl: "https://sprigboard.example/about",
 			confidence: "medium",
 		},
+		contacts: [
+			{
+				kind: "linkedin",
+				value: "https://www.linkedin.com/in/lena-ortiz-sprigboard",
+				provenanceUrl: "https://sprigboard.example/about",
+			},
+			{
+				kind: "website",
+				value: "https://sprigboard.example",
+				provenanceUrl: "https://sprigboard.example/about",
+			},
+		],
+		personContext:
+			"Lena Ortiz founded Sprigboard, a small B2B software team. In a public job post for its first growth generalist, she said founder-led prospecting had stopped scaling.",
 		whyFit:
 			"A small founder-led team is at the point where manual prospecting no longer works.",
 		whyNow:
@@ -281,6 +348,20 @@ const LEAD_SEEDS = [
 				"https://www.reddit.com/r/startups/comments/cz106/verifying_customer_pain/",
 			confidence: "high",
 		},
+		contacts: [
+			{
+				kind: "reddit",
+				value: "https://www.reddit.com/user/julesquiet/",
+				provenanceUrl: "https://www.reddit.com/user/julesquiet/",
+			},
+			{
+				kind: "website",
+				value: "https://quietlayer.example",
+				provenanceUrl: "https://quietlayer.example/about",
+			},
+		],
+		personContext:
+			"Jules Martin founded QuietLayer, a small B2B software team. In a public Reddit post, Jules said finding conversations is easy, but verifying quotes and identifying a respectful reply path takes hours.",
 		whyFit:
 			"The founder values both evidence verification and a natural public outreach channel.",
 		whyNow:
@@ -316,6 +397,20 @@ const LEAD_SEEDS = [
 			provenanceUrl: "https://branchkit.example/contact",
 			confidence: "medium",
 		},
+		contacts: [
+			{
+				kind: "public_email",
+				value: "founders@branchkit.example",
+				provenanceUrl: "https://branchkit.example/contact",
+			},
+			{
+				kind: "other",
+				value: "https://news.ycombinator.com/user?id=sanabranch",
+				provenanceUrl: "https://news.ycombinator.com/user?id=sanabranch",
+			},
+		],
+		personContext:
+			"Sana Iqbal co-founded BranchKit, a small B2B software team with a growing waitlist. Sana said publicly that the team lacks evidence for which prospects feel enough urgency to pay now.",
 		whyFit:
 			"The team needs evidence-based prioritization among early potential buyers.",
 		whyNow:
@@ -351,6 +446,15 @@ const LEAD_SEEDS = [
 			provenanceUrl: "https://metricnest.example/about",
 			confidence: "medium",
 		},
+		contacts: [
+			{
+				kind: "website",
+				value: "https://metricnest.example/about#theo",
+				provenanceUrl: "https://metricnest.example/about",
+			},
+		],
+		personContext:
+			"Theo Park founded MetricNest, a small B2B software team. In a recent public review, Theo said he canceled a competing tool because it surfaced accounts rather than the exact moment someone asked for help.",
 		whyFit:
 			"The buyer explicitly rejects account lists in favor of timely, person-level signals.",
 		whyNow: "A recent cancellation creates an active replacement window.",
@@ -387,6 +491,15 @@ const LEAD_SEEDS = [
 			provenanceUrl: "https://github.com/loomfieldhq/community/issues/112",
 			confidence: "high",
 		},
+		contacts: [
+			{
+				kind: "github",
+				value: "https://github.com/amaraw",
+				provenanceUrl: "https://github.com/amaraw",
+			},
+		],
+		personContext:
+			"Amara Wilson leads product at Loomfield, a small B2B software team. In a public GitHub issue, Amara asked for a lightweight way to turn issue discussions into qualified interviews without spamming maintainers.",
 		whyFit:
 			"The team wants a lightweight, evidence-led path from public threads to interviews.",
 		whyNow: "The open issue shows the workflow is being designed right now.",
@@ -421,6 +534,20 @@ const LEAD_SEEDS = [
 			provenanceUrl: "https://tinyrelay.example/contact",
 			confidence: "medium",
 		},
+		contacts: [
+			{
+				kind: "public_email",
+				value: "eli@tinyrelay.example",
+				provenanceUrl: "https://tinyrelay.example/contact",
+			},
+			{
+				kind: "website",
+				value: "https://tinyrelay.example",
+				provenanceUrl: "https://tinyrelay.example/contact",
+			},
+		],
+		personContext:
+			"Eli Novak founded TinyRelay, a small B2B software team. In a public contractor post, Eli said the company wants ten qualified founder interviews without buying another stale lead list.",
 		whyFit:
 			"The founder wants a small, qualified set rather than a generic account database.",
 		whyNow:
@@ -717,6 +844,8 @@ function leadFromSeed(
 				provenanceUrl: seed.reachability.provenanceUrl,
 			},
 			reachabilityConfidence: seed.reachability.confidence,
+			contacts: seed.contacts,
+			personContext: seed.personContext,
 		},
 		whyFit: seed.whyFit,
 		whyNow: seed.whyNow,
@@ -1030,6 +1159,20 @@ export function createRadarLead(input: MockRunScriptInput): Lead {
 					"https://www.reddit.com/r/SaaS/comments/cz301/qualifying_beta_users/",
 			},
 			reachabilityConfidence: "high",
+			contacts: [
+				{
+					kind: "reddit",
+					value: "https://www.reddit.com/user/norabuildsupdraft/",
+					provenanceUrl: "https://www.reddit.com/user/norabuildsupdraft/",
+				},
+				{
+					kind: "website",
+					value: "https://updraftworks.example",
+					provenanceUrl: "https://updraftworks.example/about",
+				},
+			],
+			personContext:
+				"Nora Kim is the founder of Updraft Works, a two-person B2B SaaS team opening its beta. In a public Reddit post on launch day, she said the team already needed to separate curious signups from teams with urgent problems.",
 		},
 		whyFit: `${brandName(input.domain)} is designed for a tiny team separating urgent public pain from casual interest.`,
 		whyNow: "Posted two hours ago, on the same day the team opened its beta.",

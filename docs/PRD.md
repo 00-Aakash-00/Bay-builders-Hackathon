@@ -70,7 +70,7 @@ The AI-SDR backlash is the tailwind: buyers pattern-match AI cold email in secon
 2. **The founder is the sender.** We draft; the founder approves; the send goes through the founder's own connected Gmail. Low volume by design. This is counter-positioning against the spray-and-pray AI SDR, not a lesser version of it.
 3. **Hypothesis, not database.** A prospect is "a potential customer based on public signals" — never "interested," never "confirmed." Uncertainty and stale dates are visible on the card.
 4. **Show the work.** The swarm's searching, finding, discarding, and re-strategizing streams live. Transparency is the trust mechanism for the evidence guarantee — auditability, not eye candy.
-5. **Respect the web.** Public, intentionally-shared professional/business information only, accessed through licensed search indexes. No login walls, no robots violations, no protected traits, no private-data enrichment.
+5. **Respect the web.** Public, intentionally-shared professional/business information only, accessed through licensed search indexes. No login walls, no robots violations, no protected traits, no private-data enrichment. Public contact points are never guessed, and each carries a source link.
 
 ---
 
@@ -98,7 +98,7 @@ The AI-SDR backlash is the tailwind: buyers pattern-match AI cold email in secon
 | Multi-channel hunt | ≥4 source types live (Reddit/HN via search index, G2/reviews, GitHub issues, job posts); parallel hunter lanes |
 | Evidence verification | Verifier re-fetches every source; quote-match; visible rejection events; zero unverified leads in UI |
 | Dedupe | HydraDB entity resolution + signal-hash gate; same person/company never appears twice |
-| Scoring + shortlist | Rubric (pain 25 / fit 25 / timing 20 / reachability 15 / evidence 15); stages; cards with full receipts |
+| Scoring + shortlist | Rubric (pain 25 / fit 25 / timing 20 / reachability 15 / evidence 15); stages; cards with full receipts, public contact details, and person context with provenance |
 | Outreach drafts | ≤90 words, quote-grounded, channel-appropriate |
 | Approve → Kylon send | Gmail connected via Kylon OAuth; per-lead approval; send from founder's account |
 | Live swarm feed | SSE lanes per agent: searches, finds, rejections, pivots, budget |

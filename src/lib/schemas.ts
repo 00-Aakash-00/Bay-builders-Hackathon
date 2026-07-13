@@ -160,6 +160,26 @@ export const EnrichmentSchema = z
 		company: z.string().min(1).optional(),
 		role: z.string().min(1).optional(),
 		companyContext: z.string().min(1).optional(),
+		contacts: z
+			.array(
+				z
+					.object({
+						kind: z.enum([
+							"public_email",
+							"linkedin",
+							"x",
+							"github",
+							"reddit",
+							"website",
+							"other",
+						]),
+						value: z.string().min(1),
+						provenanceUrl: UrlSchema,
+					})
+					.strict(),
+			)
+			.optional(),
+		personContext: z.string().min(1).optional(),
 		channel: z
 			.object({
 				kind: z.enum(["thread_reply", "public_email", "public_profile"]),

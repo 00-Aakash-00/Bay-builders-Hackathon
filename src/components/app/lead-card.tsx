@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import type { Lead, OutreachDraft } from "@/lib/schemas";
 import motion from "./app-motion.module.css";
 
@@ -74,6 +75,32 @@ type LeadCardProps = {
 
 export function LeadCard({ lead, draft, isSent, onApprove }: LeadCardProps) {
 	const company = lead.enrichment.company ?? lead.signal.company;
+	const contacts = lead.enrichment.contacts ?? [];
+	const personContext = lead.enrichment.personContext;
+	const hasContactContext = contacts.length > 0 || Boolean(personContext);
+	const [copiedContactIndex, setCopiedContactIndex] = useState<number | null>(
+		null,
+	);
+	const copyResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	useEffect(() => {
+		return () => {
+			if (copyResetTimer.current) clearTimeout(copyResetTimer.current);
+		};
+	}, []);
+
+	function copyContact(value: string, index: number) {
+		setCopiedContactIndex(index);
+		void navigator.clipboard.writeText(value).catch(() => {
+			setCopiedContactIndex((current) => (current === index ? null : current));
+		});
+
+		if (copyResetTimer.current) clearTimeout(copyResetTimer.current);
+		copyResetTimer.current = setTimeout(() => {
+			setCopiedContactIndex((current) => (current === index ? null : current));
+			copyResetTimer.current = null;
+		}, 1500);
+	}
 
 	return (
 		<article
@@ -135,6 +162,74 @@ export function LeadCard({ lead, draft, isSent, onApprove }: LeadCardProps) {
 						<p className="text-body-sm text-iron">{lead.whyNow}</p>
 					</div>
 				</div>
+
+				{hasContactContext ? (
+					<section className="mt-24 border-mist border-t pt-16">
+						<h3 className="text-caption font-medium text-graphite">
+							Contact &amp; context
+						</h3>
+						{contacts.length > 0 ? (
+							<div className="mt-8 flex flex-wrap gap-8">
+								{contacts.map((contact, index) => {
+									const isCopied = copiedContactIndex === index;
+
+									return (
+										<div
+											key={`${contact.kind}-${contact.value}`}
+											className="inline-flex max-w-full items-stretch rounded-sm bg-cloud font-mono text-caption"
+										>
+											<button
+												type="button"
+												onClick={() => copyContact(contact.value, index)}
+												aria-label={`Copy ${titleCase(contact.kind)} contact: ${contact.value}`}
+												className="flex min-w-0 items-center gap-8 rounded-sm px-8 py-8 text-left outline-none focus-visible:ring-2 focus-visible:ring-ash"
+											>
+												<span className="shrink-0 text-steel">
+													{titleCase(contact.kind)}
+												</span>
+												<span className="inline-grid min-w-0 text-obsidian">
+													<span
+														aria-hidden="true"
+														className={`col-start-1 row-start-1 break-all transition-opacity duration-100 ease-out-strong motion-reduce:transition-none ${
+															isCopied ? "opacity-0" : "opacity-100"
+														}`}
+													>
+														{contact.value}
+													</span>
+													<span
+														aria-hidden="true"
+														className={`col-start-1 row-start-1 transition-opacity duration-100 ease-out-strong motion-reduce:transition-none ${
+															isCopied ? "opacity-100" : "opacity-0"
+														}`}
+													>
+														Copied
+													</span>
+												</span>
+											</button>
+											<a
+												href={contact.provenanceUrl}
+												target="_blank"
+												rel="noreferrer"
+												aria-label={`View provenance for ${titleCase(contact.kind)} contact`}
+												className="flex shrink-0 items-center px-8 py-8 text-steel underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ash"
+											>
+												↗
+											</a>
+										</div>
+									);
+								})}
+							</div>
+						) : null}
+						<span className="sr-only" role="status">
+							{copiedContactIndex !== null
+								? `${contacts[copiedContactIndex]?.value} copied`
+								: ""}
+						</span>
+						{personContext ? (
+							<p className="mt-16 text-body-sm text-iron">{personContext}</p>
+						) : null}
+					</section>
+				) : null}
 
 				<p className="mt-24 font-mono text-caption text-steel">
 					Pain {lead.score.pain}/5 · Fit {lead.score.fit}/5 · Timing{" "}

@@ -91,7 +91,7 @@ Runtime: `@anthropic-ai/claude-agent-sdk` (TS). One `query()` per run = the orch
 | `hunter` ×N (parallel, one per channel) | `claude-sonnet-5` | tavily_search, youcom_search, nimble_serp | `CandidateSignal[]` | Execute the pack; prefer original pages over snippets; return post/author/quote/URL/date candidates. `maxTurns: 12`. |
 | `extractor` | `claude-haiku-4-5` | tavily_extract, nimble_extract | `ExtractedSignal` | Page → typed record. Cannot emit without `quote` + `url`; labels `date_unavailable`. |
 | `verifier` (adversarial) | `claude-opus-4-8` | tavily_extract, nimble_extract (read-only) | `Verdict` | Independently re-fetch the source, quote-match (normalized similarity ≥ 0.8), recency + authorship check. **Prompted to refute; default REJECT.** Never sees the hunter's reasoning — only the claim. |
-| `enricher` | `claude-sonnet-5` | nimble_extract, nimble_map_crawl, youcom_search | `Enrichment` | Company/role context + natural public channel (reply-in-thread / public business email from contact page / public profile). No email guessing. |
+| `enricher` | `claude-sonnet-5` | nimble_extract, nimble_map_crawl, youcom_search | `Enrichment` | Company/role context + natural public channel + public contact points + person context, each with provenance; never guessed. |
 | `scorer` | `claude-sonnet-5` | (none) | `ScoreBreakdown` | Rubric: pain 25 / fit 25 / timing 20 / reachability 15 / evidence 15 → 0–100 + stage. <50 → `BELOW_THRESHOLD`. |
 | `composer` | `claude-sonnet-5` | (none) | `OutreachDraft` | ≤90-word opener: mention the public context → connect to the exact problem → product in one sentence → one low-friction question. Grounded ONLY in cited evidence. |
 | `pattern-analyst` | `claude-haiku-4-5` | hydra_recall | `PatternInsight[]` + `RadarQueryPack` | Recurring pains across leads; distills the run's best-performing queries for the radar. |
@@ -117,7 +117,9 @@ ExtractedSignal  { url, channel, quote, authorHandle?, authorDisplay?, company?,
 Verdict          { signalHash, verdict: 'VERIFIED'|'REJECTED', quoteMatchScore, recencyOk, authorshipOk,
                    rejectReason?, fetchedAt }
 Enrichment       { company?, role?, companyContext?, channel: { kind: 'thread_reply'|'public_email'|'public_profile',
-                   value, provenanceUrl }, reachabilityConfidence: 'high'|'medium'|'low' }
+                   value, provenanceUrl }, reachabilityConfidence: 'high'|'medium'|'low',
+                   contacts?: { kind: 'public_email'|'linkedin'|'x'|'github'|'reddit'|'website'|'other',
+                   value, provenanceUrl }[], personContext?: string }
 ScoreBreakdown   { pain: 0..5, fit: 0..5, timing: 0..5, reachability: 0..5, evidenceQuality: 0..5,
                    total: 0..100, stage: 'high_intent'|'problem_aware'|'trigger_present' }
 Lead             { id, runId, name, type: 'person'|'company', signal: ExtractedSignal, score: ScoreBreakdown,
