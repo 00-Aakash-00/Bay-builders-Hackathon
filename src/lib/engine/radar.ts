@@ -1,19 +1,15 @@
 import { getRun, registerRadarRunner } from "@/lib/run-store";
-import type { Lead, QueryPack } from "@/lib/schemas";
-import { runRadarRound } from "./orchestrator";
+import type { Lead } from "@/lib/schemas";
+import {
+	appendEngineEvent,
+	type HuntContext,
+	persistRunState,
+	runConveyorHunt,
+	storedConfirmedHunt,
+} from "./hunt";
+import { getTavilyBudget } from "./tools/tavily";
 
 const activeTicks = new Map<string, Promise<Lead | undefined>>();
-
-function storedQueryPack(runId: string): QueryPack | undefined {
-	const run = getRun(runId);
-	for (let index = (run?.events.length ?? 0) - 1; index >= 0; index -= 1) {
-		const event = run?.events[index];
-		if (event?.type === "stage_change" && event.payload.queryPlan) {
-			return event.payload.queryPlan.packs[0];
-		}
-	}
-	return undefined;
-}
 
 export function runRealRadarTick(runId: string): Promise<Lead | undefined> {
 	const existing = activeTicks.get(runId);
@@ -24,11 +20,34 @@ export function runRealRadarTick(runId: string): Promise<Lead | undefined> {
 		if (run?.state !== "REVIEW" && run?.state !== "RADAR") {
 			return undefined;
 		}
-		const queryPack = storedQueryPack(runId);
-		if (!queryPack) {
-			throw new Error(`Run ${runId} has no stored radar query pack`);
+		const stored = storedConfirmedHunt(runId);
+		const firstPack = stored?.plan.packs[0];
+		if (!stored || !firstPack) {
+			throw new Error(`Run ${runId} has no stored radar strategy`);
 		}
-		return runRadarRound(runId, queryPack);
+		const context: HuntContext = {
+			runId,
+			domain: run.domain,
+			depth: run.depth,
+			quota: 1,
+			radar: true,
+			lastBudgetSpent: getTavilyBudget(runId).spent,
+		};
+		await runConveyorHunt(context, stored.icp, {
+			...stored.plan,
+			packs: [firstPack],
+		});
+		const currentState = getRun(runId)?.state;
+		if (currentState !== "REVIEW" && currentState !== "RADAR") {
+			return context.acceptedLead;
+		}
+		appendEngineEvent(runId, {
+			lane: "system",
+			type: "stage_change",
+			payload: { state: "RADAR", domain: run.domain },
+		});
+		await persistRunState(context);
+		return context.acceptedLead;
 	})().finally(() => {
 		activeTicks.delete(runId);
 	});

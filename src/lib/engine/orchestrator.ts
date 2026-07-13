@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
 	type AgentDefinition,
 	type AnyZodRawShape,
@@ -10,50 +9,31 @@ import {
 	tool,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { getRun, type RunDepth, waitForIcpConfirmation } from "@/lib/run-store";
 import {
-	append,
-	getRun,
-	type RunDepth,
-	waitForIcpConfirmation,
-} from "@/lib/run-store";
-import {
-	type CandidateSignal,
 	CandidateSignalSchema,
-	type Lead,
 	LeadSchema,
-	type OutreachDraft,
 	OutreachDraftSchema,
-	type QueryPack,
 	type RunEvent,
 	RunEventSchema,
 } from "@/lib/schemas";
 import { enrichLead } from "./enrich";
-import { quoteMatchScore } from "./evidence";
-import { postToRoom } from "./tools/band";
 import {
-	addVerifiedLeadMemory,
-	leadEntitySummary,
-	recallDuplicate,
-} from "./tools/hydradb";
-import {
-	ensureInsForgeTables,
-	upsertRun,
-	upsertVerifiedLead,
-} from "./tools/insforge";
-import { extractNimble, searchNimble } from "./tools/nimble";
-import {
-	extractTavily,
-	getTavilyBudget,
-	resetTavilyBudget,
-	searchTavily,
-} from "./tools/tavily";
-import { searchYouCom } from "./tools/youcom";
+	appendEngineEvent,
+	emitBudget,
+	extractWeb,
+	finalizeVerifiedLead,
+	type HuntContext,
+	persistRunState,
+	runConveyorHunt,
+	searchWeb,
+	storedConfirmedHunt,
+} from "./hunt";
+import { addVerifiedLeadMemory, recallDuplicate } from "./tools/hydradb";
+import { ensureInsForgeTables } from "./tools/insforge";
+import { getTavilyBudget, resetTavilyBudget } from "./tools/tavily";
 
-type EngineEventInput = RunEvent extends infer Event
-	? Event extends RunEvent
-		? Omit<Event, "runId" | "seq" | "ts">
-		: never
-	: never;
+export { appendEngineEvent } from "./hunt";
 
 interface OrchestratorInput {
 	runId: string;
@@ -61,33 +41,14 @@ interface OrchestratorInput {
 	depth: RunDepth;
 }
 
-interface RunContext extends OrchestratorInput {
-	quota: number;
-	radar: boolean;
-	lastBudgetSpent: number;
+interface RunContext extends HuntContext {
 	agentLanes: Map<string, string>;
-	acceptedLead?: Lead;
-}
-
-interface WebResult {
-	title: string;
-	url: string;
-	content: string;
-	publishedDate?: string;
-	synthetic?: boolean;
-	provider: "tavily" | "youcom" | "nimble";
-}
-
-interface AgentInvocationPolicy {
-	limits?: Record<string, number>;
-	required?: string[];
-	maxConcurrent?: Record<string, number>;
 }
 
 const CompletionSchema = z
 	.object({
-		status: z.enum(["REVIEW", "RADAR"]),
-		verifiedLeadCount: z.number().int().nonnegative(),
+		status: z.literal("REVIEW"),
+		verifiedLeadCount: z.literal(0),
 	})
 	.strict();
 
@@ -104,15 +65,6 @@ ScoreBreakdown: { pain: 0..5, fit: 0..5, timing: 0..5, reachability: 0..5, evide
 OutreachDraft: { leadId: string, channel: string, subject?: string, body: string (1..90 words), groundedIn: http(s) URL[1..] }
 emit_event accepts only stage_change|agent_started|tool_call|signal_found|signal_rejected|strategy_pivot|error. save_lead/system code emits lead_verified|lead_scored|draft_ready|radar_alert|budget_update.`;
 
-const mirrorTypes = new Set<RunEvent["type"]>([
-	"stage_change",
-	"strategy_pivot",
-	"lead_verified",
-	"signal_rejected",
-	"radar_alert",
-]);
-const leadSaveQueues = new Map<string, Promise<void>>();
-
 function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 		? (value as Record<string, unknown>)
@@ -124,337 +76,10 @@ function shortText(value: string, fallback: string): string {
 	return (normalized || fallback).slice(0, 220);
 }
 
-function mirrorText(event: RunEvent): string {
-	switch (event.type) {
-		case "stage_change":
-			return `Run stage: ${event.payload.state}`;
-		case "strategy_pivot":
-			return `Strategy pivot: ${event.payload.rationale}`;
-		case "lead_verified":
-			return `Verified lead: ${event.payload.name}`;
-		case "signal_rejected":
-			return `Signal rejected: ${event.payload.reason}`;
-		case "radar_alert":
-			return `Radar alert: ${event.payload.name}`;
-		default:
-			return event.type;
-	}
-}
-
-export function appendEngineEvent(
-	runId: string,
-	event: EngineEventInput,
-): RunEvent {
-	const run = getRun(runId);
-	if (!run) {
-		throw new Error(`Unknown run: ${runId}`);
-	}
-
-	const parsed = RunEventSchema.parse({
-		...event,
-		runId,
-		seq: (run.events.at(-1)?.seq ?? 0) + 1,
-		ts: new Date().toISOString(),
-	});
-	const stored = append(runId, parsed);
-	if (mirrorTypes.has(stored.type)) {
-		void postToRoom(runId, mirrorText(stored));
-	}
-	return stored;
-}
-
-function signalHash(url: string, authorHandle?: string): string {
-	const normalizedUrl = new URL(url);
-	normalizedUrl.hash = "";
-	normalizedUrl.hostname = normalizedUrl.hostname.toLocaleLowerCase("en-US");
-	normalizedUrl.searchParams.sort();
-	const normalized = normalizedUrl.toString().replace(/\/$/u, "");
-	return createHash("sha256")
-		.update(`${normalized}${authorHandle ?? ""}`)
-		.digest("hex");
-}
-
-async function persistRunState(context: RunContext): Promise<void> {
-	const run = getRun(context.runId);
-	if (!run) return;
-	try {
-		await upsertRun({
-			id: run.id,
-			domain: run.domain,
-			depth: run.depth,
-			state: run.state,
-			createdAt: run.createdAt,
-		});
-	} catch (error) {
-		console.warn(
-			`[engine] InsForge run upsert failed for ${context.runId}`,
-			error instanceof Error ? error.message : error,
-		);
-	}
-}
-
-function emitBudget(context: RunContext): void {
-	const budget = getTavilyBudget(context.runId);
-	if (budget.spent === context.lastBudgetSpent) return;
-	context.lastBudgetSpent = budget.spent;
-	appendEngineEvent(context.runId, {
-		lane: "system",
-		type: "budget_update",
-		payload: { ...budget, provider: "tavily" },
-	});
-}
-
-function providerOrder(
-	requested?: "tavily" | "youcom" | "nimble",
-): Array<"tavily" | "youcom" | "nimble"> {
-	const providers = ["tavily", "youcom", "nimble"] as const;
-	return requested
-		? [requested, ...providers.filter((provider) => provider !== requested)]
-		: [...providers];
-}
-
-async function searchWeb(
-	context: RunContext,
-	queryText: string,
-	requested?: "tavily" | "youcom" | "nimble",
-	maxResults = 5,
-): Promise<WebResult[]> {
-	for (const provider of providerOrder(requested)) {
-		try {
-			const results =
-				provider === "tavily"
-					? await searchTavily(context.runId, queryText, { maxResults })
-					: provider === "youcom"
-						? await searchYouCom(queryText, { count: maxResults })
-						: await searchNimble(queryText, { maxResults });
-			if (provider === "tavily") emitBudget(context);
-			if (results.length > 0) {
-				return results.map((result) => ({ ...result, provider }));
-			}
-		} catch (error) {
-			if (provider === "tavily") emitBudget(context);
-			console.warn(
-				`[engine] ${provider} search failed; trying fallback`,
-				error instanceof Error ? error.message : error,
-			);
-		}
-	}
-	return [];
-}
-
-async function extractWeb(
-	context: RunContext,
-	urls: string[],
-	requested?: "tavily" | "nimble",
-): Promise<
-	Array<{
-		url: string;
-		rawContent: string;
-		provider: string;
-		synthetic?: boolean;
-	}>
-> {
-	const availableProviders = ["tavily", "nimble"] as const;
-	const providers = requested
-		? [
-				requested,
-				...availableProviders.filter((provider) => provider !== requested),
-			]
-		: [...availableProviders];
-	for (const provider of providers) {
-		try {
-			const results =
-				provider === "tavily"
-					? await extractTavily(context.runId, urls)
-					: await extractNimble(urls);
-			if (provider === "tavily") emitBudget(context);
-			if (results.length > 0) {
-				return results.map((result) => ({ ...result, provider }));
-			}
-		} catch (error) {
-			if (provider === "tavily") emitBudget(context);
-			console.warn(
-				`[engine] ${provider} extract failed; trying fallback`,
-				error instanceof Error ? error.message : error,
-			);
-		}
-	}
-	return [];
-}
-
 function jsonResult(value: unknown) {
 	return {
 		content: [{ type: "text" as const, text: JSON.stringify(value) }],
 	};
-}
-
-async function rejectLead(
-	context: RunContext,
-	candidate: CandidateSignal,
-	reason: string,
-) {
-	appendEngineEvent(context.runId, {
-		lane: "verifier",
-		type: "signal_rejected",
-		payload: { signal: candidate, reason },
-	});
-	return jsonResult({ accepted: false, reason });
-}
-
-async function saveLeadUnlocked(
-	context: RunContext,
-	candidateInput: CandidateSignal,
-	leadInput: Lead,
-	draftInput: OutreachDraft,
-) {
-	const candidate = CandidateSignalSchema.parse(candidateInput);
-	let lead = LeadSchema.parse(leadInput);
-	const draft = OutreachDraftSchema.parse(draftInput);
-	if (lead.runId !== context.runId) {
-		return rejectLead(context, candidate, "lead runId does not match this run");
-	}
-	if (new URL(lead.signal.url).href !== new URL(candidate.url).href) {
-		return rejectLead(context, candidate, "lead URL does not match candidate");
-	}
-	if (draft.leadId !== lead.id) {
-		return rejectLead(context, candidate, "draft leadId does not match lead");
-	}
-	if (
-		draft.groundedIn.some(
-			(url) => new URL(url).href !== new URL(lead.signal.url).href,
-		)
-	) {
-		return rejectLead(
-			context,
-			candidate,
-			"draft cites a URL other than the verified signal",
-		);
-	}
-
-	const run = getRun(context.runId);
-	if (!run) throw new Error(`Unknown run: ${context.runId}`);
-	if (
-		(!context.radar && (run.state !== "HUNTING" || !run.selectedIcpId)) ||
-		(context.radar && run.state !== "REVIEW" && run.state !== "RADAR")
-	) {
-		return rejectLead(context, candidate, "run is not ready to accept leads");
-	}
-	if (
-		(!context.radar && run.leads.size >= context.quota) ||
-		(context.radar && context.acceptedLead)
-	) {
-		return jsonResult({
-			accepted: false,
-			reason: "verified lead quota reached",
-		});
-	}
-
-	lead = LeadSchema.parse({
-		...lead,
-		signal: {
-			...lead.signal,
-			hash: signalHash(lead.signal.url, lead.signal.authorHandle),
-		},
-	});
-	if (
-		run.leads.has(lead.id) ||
-		[...run.leads.values()].some(
-			(existing) => existing.signal.hash === lead.signal.hash,
-		) ||
-		(await recallDuplicate(context.runId, leadEntitySummary(lead)))
-	) {
-		return rejectLead(context, candidate, "duplicate entity or signal");
-	}
-
-	const fetchedAt = new Date().toISOString();
-	const extracts = await extractWeb(context, [lead.signal.url], "tavily");
-	const evidence = extracts.find(
-		(result) => new URL(result.url).href === new URL(lead.signal.url).href,
-	);
-	if (!evidence?.rawContent) {
-		return rejectLead(context, candidate, "source could not be re-fetched");
-	}
-	if (evidence.synthetic) {
-		return rejectLead(
-			context,
-			candidate,
-			"synthetic extraction is not evidence",
-		);
-	}
-
-	const matchScore = quoteMatchScore(lead.signal.quote, evidence.rawContent);
-	if (matchScore < 0.8) {
-		return rejectLead(
-			context,
-			candidate,
-			`quote match ${matchScore.toFixed(2)} is below 0.80`,
-		);
-	}
-	if (lead.score.total < 65) {
-		return rejectLead(
-			context,
-			candidate,
-			`score ${lead.score.total} is below the qualifying threshold of 65`,
-		);
-	}
-
-	try {
-		await upsertVerifiedLead(lead, {
-			fetchedAt,
-			quoteMatchScore: matchScore,
-		});
-	} catch (error) {
-		console.warn(
-			`[engine] InsForge lead checkpoint failed for ${lead.id}`,
-			error instanceof Error ? error.message : error,
-		);
-	}
-	await addVerifiedLeadMemory(context.runId, lead);
-
-	appendEngineEvent(context.runId, {
-		lane: "verifier",
-		type: context.radar ? "radar_alert" : "lead_verified",
-		payload: lead,
-	});
-	appendEngineEvent(context.runId, {
-		lane: "scorer",
-		type: "lead_scored",
-		payload: { leadId: lead.id, score: lead.score },
-	});
-	appendEngineEvent(context.runId, {
-		lane: "composer",
-		type: "draft_ready",
-		payload: { draft, status: "draft" },
-	});
-	context.acceptedLead = lead;
-	return jsonResult({
-		accepted: true,
-		leadId: lead.id,
-		quoteMatchScore: matchScore,
-	});
-}
-
-async function saveLead(
-	context: RunContext,
-	candidate: CandidateSignal,
-	lead: Lead,
-	draft: OutreachDraft,
-) {
-	const previous = leadSaveQueues.get(context.runId) ?? Promise.resolve();
-	let release = () => {};
-	const current = new Promise<void>((resolve) => {
-		release = resolve;
-	});
-	leadSaveQueues.set(context.runId, current);
-	await previous;
-	try {
-		return await saveLeadUnlocked(context, candidate, lead, draft);
-	} finally {
-		release();
-		if (leadSaveQueues.get(context.runId) === current) {
-			leadSaveQueues.delete(context.runId);
-		}
-	}
 }
 
 function assertValidStageChange(
@@ -493,7 +118,7 @@ function assertValidStageChange(
 	}
 	if (state === "STRATEGY") {
 		if (
-			(run.state !== "ICP_CONFIRM" && run.state !== "HUNTING") ||
+			run.state !== "ICP_CONFIRM" ||
 			!run.selectedIcpId ||
 			event.payload.queryPlan?.icpId !== run.selectedIcpId
 		) {
@@ -628,7 +253,7 @@ function createTools(context: RunContext) {
 				draft: OutreachDraftSchema,
 			},
 			async ({ candidate, lead, draft }) =>
-				saveLead(context, candidate, lead, draft),
+				jsonResult(await finalizeVerifiedLead(context, candidate, lead, draft)),
 		),
 		tool(
 			"emit_event",
@@ -655,13 +280,26 @@ function createTools(context: RunContext) {
 					type: args.type,
 					payload: args.payload,
 				});
+				if (
+					event.type === "signal_found" ||
+					event.type === "signal_rejected" ||
+					event.type === "strategy_pivot"
+				) {
+					throw new Error("Hunt events are emitted only by the code conveyor");
+				}
 				if (event.type === "stage_change") {
+					if (
+						event.payload.state !== "INTAKE" &&
+						event.payload.state !== "ICP_CONFIRM" &&
+						event.payload.state !== "STRATEGY"
+					) {
+						throw new Error(
+							"The Claude session may only emit INTAKE, ICP_CONFIRM, or STRATEGY",
+						);
+					}
 					assertValidStageChange(context, event);
 				}
-				append(context.runId, event);
-				if (mirrorTypes.has(event.type)) {
-					void postToRoom(context.runId, mirrorText(event));
-				}
+				appendEngineEvent(context.runId, event);
 				if (event.type === "stage_change") {
 					await persistRunState(context);
 					if (event.payload.state === "ICP_CONFIRM") {
@@ -718,59 +356,6 @@ const agentDefinitions = {
 		tools: [],
 		maxTurns: 6,
 	},
-	hunter: {
-		description:
-			"Execute one public-web query pack and return candidate signals.",
-		prompt:
-			"Use web_search. Prefer original public pages. Return as many viable typed CandidateSignal JSON objects as available, up to 8 per invocation, with exact snippet-derived quoteCandidate values. Clearly retain synthetic labels.",
-		model: "claude-sonnet-5",
-		tools: [mcpTool("web_search"), mcpTool("budget_read")],
-		maxTurns: 12,
-	},
-	extractor: {
-		description: "Extract one candidate into a typed signal.",
-		prompt:
-			"Use web_extract. Return only one ExtractedSignal JSON object. Never invent a quote, URL, date, or identity.",
-		model: "claude-haiku-4-5",
-		tools: [mcpTool("web_extract")],
-		maxTurns: 6,
-	},
-	verifier: {
-		description: "Adversarially verify one extracted public signal.",
-		prompt:
-			"Default REJECT. Independently use web_extract, check exact quote support, authorship, and recency, then return only one Verdict JSON object. Never rely on search snippets alone.",
-		model: "claude-sonnet-5",
-		tools: [mcpTool("web_extract"), mcpTool("memory_recall")],
-		maxTurns: 8,
-	},
-	enricher: {
-		description: "Find minimal public business context and a natural channel.",
-		prompt:
-			"Use public pages only. You MUST call enrich_lead and merge its returned contacts and datapoints unchanged into the Lead enrichment before save_lead. The LLM may not invent or alter datapoints; only tool output is allowed. Return one Enrichment JSON object. Never guess emails or infer protected traits.",
-		model: "claude-sonnet-5",
-		tools: [
-			mcpTool("web_search"),
-			mcpTool("web_extract"),
-			mcpTool("enrich_lead"),
-		],
-		maxTurns: 8,
-	},
-	scorer: {
-		description: "Score a verified signal on the CustomerZero evidence rubric.",
-		prompt:
-			"Return only one ScoreBreakdown JSON object. Score pain/fit/timing/reachability/evidenceQuality 0-5 and total 0-100.",
-		model: "claude-sonnet-5",
-		tools: [],
-		maxTurns: 4,
-	},
-	composer: {
-		description: "Compose a short evidence-grounded outreach draft.",
-		prompt:
-			"Return only one OutreachDraft JSON object of at most 90 words, grounded exclusively in the verified URL, with one low-friction question.",
-		model: "claude-sonnet-5",
-		tools: [],
-		maxTurns: 4,
-	},
 } satisfies Record<string, AgentDefinition>;
 
 function orchestrationPrompt(context: RunContext): string {
@@ -783,10 +368,7 @@ Use the Agent tool for every specialist. Use only the CustomerZero MCP tools for
 Flow:
 1. Delegate to intake-analyst. Emit a stage_change INTAKE containing domain and the strict ProductBrief.
 2. Delegate to icp-architect. Emit stage_change ICP_CONFIRM containing domain, brief, and 2-3 strict ICP hypotheses. Stop after that tool call and wait for the founder's selection in the next user message.
-3. Delegate to hunt-strategist. Emit STRATEGY with a strict QueryPlan, then HUNTING with the same plan.
-4. Run hunter agents in batches of at most four, returning as many viable typed CandidateSignal objects as available, up to 8 per invocation. STREAM RESULTS: emit signal_found the moment each candidate is discovered — never hold candidates back. Then pipeline each candidate INDIVIDUALLY through extractor, memory_recall, verifier, enricher, scorer, and composer, and call save_lead IMMEDIATELY when that single candidate passes verification — never batch verified leads for a later save. The founder is watching live; every found/rejected/verified moment must appear in real time. Reject anything unsupported with signal_rejected as soon as it fails. Only call save_lead after verifier re-fetches the URL and supports the quote. save_lead enforces evidence again.
-5. Continue until quota, no viable signals, or budget floor. Call budget_read between waves. Emit visible strategy_pivot events when changing lanes.
-6. Emit stage_change REVIEW. End with structured status REVIEW and the actual verified lead count.
+3. Delegate to hunt-strategist. Emit STRATEGY with a strict QueryPlan. After emitting STRATEGY, do not search, extract, hunt, enrich, score, compose, save leads, or emit HUNTING. End immediately with structured status REVIEW and verifiedLeadCount 0. Deterministic code takes over the hunt.
 
 Every emit_event payload must exactly match the existing RunEvent schema. Never emit lead_verified or radar_alert directly.
 
@@ -806,7 +388,7 @@ async function* gatedOrchestrationPrompt(
 		type: "user",
 		message: {
 			role: "user",
-			content: `The founder selected ICP ${selectedIcpId}. Continue from STRATEGY using only that ICP.`,
+			content: `The founder selected ICP ${selectedIcpId}. Delegate to hunt-strategist using only that ICP, emit STRATEGY, then end with structured status REVIEW and verifiedLeadCount 0. Do not hunt or emit HUNTING.`,
 		},
 		parent_tool_use_id: null,
 	};
@@ -971,7 +553,6 @@ async function executeQuery(
 	agents: Record<string, AgentDefinition>,
 	maxTurns: number,
 	model: "claude-sonnet-5" | "claude-haiku-4-5",
-	agentPolicy?: AgentInvocationPolicy,
 ): Promise<void> {
 	const mcpServer = createSdkMcpServer({
 		name: "customerzero",
@@ -992,6 +573,7 @@ async function executeQuery(
 		"budget_read",
 	].map(mcpTool);
 	let failure: string | undefined;
+	let completed = false;
 	// NOTE: PreToolUse/PostToolUse hooks were removed here deliberately. The
 	// CLI's hook-output validator rejected their return shapes ("Error in hook
 	// callback"), which poisoned the session transport and surfaced as
@@ -1025,8 +607,13 @@ async function executeQuery(
 	try {
 		for await (const message of stream) {
 			routeSdkMessage(context, message);
-			if (message.type === "result" && message.subtype !== "success") {
-				failure = message.errors.join("; ") || message.subtype;
+			if (message.type === "result") {
+				if (message.subtype === "success") {
+					CompletionSchema.parse(message.structured_output);
+					completed = true;
+				} else {
+					failure = message.errors.join("; ") || message.subtype;
+				}
 			}
 		}
 	} finally {
@@ -1037,7 +624,79 @@ async function executeQuery(
 		}
 	}
 	if (failure) throw new Error(failure);
-	void agentPolicy;
+	if (!completed)
+		throw new Error("Claude session ended without structured output");
+}
+
+function selectedIcpFromEvents(runId: string) {
+	const run = getRun(runId);
+	if (!run?.selectedIcpId) return undefined;
+	for (let index = run.events.length - 1; index >= 0; index -= 1) {
+		const event = run.events[index];
+		if (event.type !== "stage_change") continue;
+		const icp = event.payload.icps?.find(
+			(hypothesis) => hypothesis.id === run.selectedIcpId,
+		);
+		if (icp) return icp;
+	}
+	return undefined;
+}
+
+function completedSessionStrategy(runId: string) {
+	return getRun(runId)?.state === "STRATEGY"
+		? storedConfirmedHunt(runId)
+		: undefined;
+}
+
+async function* retryStrategyPrompt(
+	context: RunContext,
+): AsyncGenerator<SDKUserMessage> {
+	const run = getRun(context.runId);
+	if (run?.state !== "ICP_CONFIRM") {
+		for await (const message of gatedOrchestrationPrompt(context)) {
+			yield message;
+		}
+		return;
+	}
+
+	const selectedIcpId =
+		run.selectedIcpId ?? (await waitForIcpConfirmation(context.runId));
+	const icp = selectedIcpFromEvents(context.runId);
+	if (!icp || icp.id !== selectedIcpId) {
+		throw new Error("Confirmed ICP is missing from the run event history");
+	}
+	yield {
+		type: "user",
+		message: {
+			role: "user",
+			content: `Resume CustomerZero run ${context.runId} from its completed founder gate. Delegate only to hunt-strategist using this confirmed ICP:\n${JSON.stringify(icp)}\n\nEmit exactly one STRATEGY stage_change with a strict QueryPlan whose icpId is ${selectedIcpId}. Do not hunt or emit HUNTING. Then end with structured status REVIEW and verifiedLeadCount 0.\n\n${eventPayloadReference}`,
+		},
+		parent_tool_use_id: null,
+	};
+}
+
+async function appendCodeStage(
+	context: RunContext,
+	payload: Extract<RunEvent, { type: "stage_change" }>["payload"],
+): Promise<void> {
+	const event = RunEventSchema.parse({
+		runId: context.runId,
+		ts: new Date().toISOString(),
+		seq: (getRun(context.runId)?.events.at(-1)?.seq ?? 0) + 1,
+		lane: "system",
+		type: "stage_change",
+		payload,
+	});
+	if (event.type !== "stage_change") {
+		throw new Error("Expected a stage_change event");
+	}
+	assertValidStageChange(context, event);
+	appendEngineEvent(context.runId, {
+		lane: event.lane,
+		type: event.type,
+		payload: event.payload,
+	});
+	await persistRunState(context);
 }
 
 export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
@@ -1065,7 +724,6 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
 	emitBudget(context);
 	await persistRunState(context);
 
-	let firstAttemptFailed = false;
 	let firstAttemptError: unknown;
 	try {
 		await executeQuery(
@@ -1074,116 +732,52 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
 			agentDefinitions,
 			250,
 			"claude-sonnet-5",
-			{ maxConcurrent: { hunter: 4 } },
 		);
 	} catch (error) {
-		firstAttemptFailed = true;
 		firstAttemptError = error;
 	}
 
-	const firstAttemptRun = getRun(input.runId);
-	if (firstAttemptFailed || firstAttemptRun?.state !== "REVIEW") {
-		if (!firstAttemptRun?.selectedIcpId) {
-			if (firstAttemptFailed) throw firstAttemptError;
-			throw new Error(
-				"Claude completed before the confirmed-ICP hunt finished",
-			);
-		}
-
-		const verifiedLeadCount = firstAttemptRun.leads.size;
-		const remainingQuota = Math.max(context.quota - verifiedLeadCount, 0);
-		const stageCheckpoint = firstAttemptRun.events
-			.filter((event) => event.type === "stage_change")
-			.map((event) => event.payload);
+	if (!completedSessionStrategy(input.runId)) {
 		appendEngineEvent(input.runId, {
 			lane: "system",
 			type: "agent_started",
 			payload: {
 				agent: "system",
-				message: "resuming interrupted hunt — attempt 2",
+				message: "resuming interrupted strategy session — attempt 2",
 			},
 		});
-		await executeQuery(
-			context,
-			`This is a resumed hunt for CustomerZero run ${context.runId}; the previous session was interrupted or ended before clean completion. Continue from where it stopped without repeating INTAKE or ICP_CONFIRM.
-Domain: ${context.domain}
-Current run state: ${firstAttemptRun.state}
-Confirmed ICP id: ${firstAttemptRun.selectedIcpId}
-Current verified-lead count: ${verifiedLeadCount}
-Remaining quota: ${remainingQuota} of ${context.quota}
-Persisted stage checkpoint: ${JSON.stringify(stageCheckpoint)}
+		try {
+			await executeQuery(
+				context,
+				retryStrategyPrompt(context),
+				agentDefinitions,
+				250,
+				"claude-sonnet-5",
+			);
+		} catch (retryError) {
+			if (!completedSessionStrategy(input.runId)) {
+				throw retryError instanceof Error
+					? retryError
+					: new Error("Claude strategy retry failed");
+			}
+		}
+	}
 
-Use the Agent tool for specialists and only CustomerZero MCP tools for external actions. If the state is ICP_CONFIRM, create the confirmed ICP's strategy and transition through STRATEGY to HUNTING. If it is STRATEGY, continue with its saved QueryPlan into HUNTING. If it is HUNTING, resume hunter waves and the extractor, memory_recall, verifier, enricher, scorer, composer, and save_lead pipeline. If it is already REVIEW, do not reopen the hunt. Respect the remaining quota and current budget. Emit stage_change REVIEW when the hunt is done, then end with structured status REVIEW and the actual verified lead count.
-
-${eventPayloadReference}`,
-			agentDefinitions,
-			250,
-			"claude-sonnet-5",
-			{ maxConcurrent: { hunter: 4 } },
+	const stored = completedSessionStrategy(input.runId);
+	if (!stored) {
+		if (firstAttemptError instanceof Error) throw firstAttemptError;
+		throw new Error(
+			"Claude completed before producing a confirmed-ICP strategy",
 		);
 	}
-	const completedRun = getRun(input.runId);
-	if (completedRun?.state !== "REVIEW") {
-		if (completedRun?.state !== "HUNTING" || !completedRun.selectedIcpId) {
-			throw new Error(
-				"Claude completed before the confirmed-ICP hunt finished",
-			);
-		}
-		appendEngineEvent(input.runId, {
-			lane: "system",
-			type: "stage_change",
-			payload: { state: "REVIEW", domain: input.domain },
-		});
-	}
-	await persistRunState(context);
-}
-
-export async function runRadarRound(
-	runId: string,
-	queryPack: QueryPack,
-): Promise<Lead | undefined> {
-	const run = getRun(runId);
-	if (!run) throw new Error(`Unknown run: ${runId}`);
-	const context: RunContext = {
-		runId,
-		domain: run.domain,
-		depth: run.depth,
-		quota: 1,
-		radar: true,
-		lastBudgetSpent: getTavilyBudget(runId).spent,
-		agentLanes: new Map(),
-	};
-	const radarAgents = {
-		hunter: agentDefinitions.hunter,
-		extractor: agentDefinitions.extractor,
-		verifier: agentDefinitions.verifier,
-		enricher: agentDefinitions.enricher,
-		scorer: agentDefinitions.scorer,
-		composer: agentDefinitions.composer,
-	};
-	await executeQuery(
-		context,
-		`Run exactly one cached radar round for this query pack: ${JSON.stringify(queryPack)}. Invoke hunter once, then extractor, memory_recall, verifier, enricher, scorer, and composer for at most one new candidate. Call save_lead only after an independent verifier re-fetch. End with structured status RADAR and the accepted lead count.`,
-		radarAgents,
-		40,
-		"claude-sonnet-5",
-		{
-			limits: {
-				hunter: 1,
-				extractor: 1,
-				verifier: 1,
-				enricher: 1,
-				scorer: 1,
-				composer: 1,
-			},
-			required: ["hunter", "verifier"],
-		},
-	);
-	appendEngineEvent(runId, {
-		lane: "system",
-		type: "stage_change",
-		payload: { state: "RADAR", domain: run.domain },
+	await appendCodeStage(context, {
+		state: "HUNTING",
+		domain: input.domain,
+		queryPlan: stored.plan,
 	});
-	await persistRunState(context);
-	return context.acceptedLead;
+	await runConveyorHunt(context, stored.icp, stored.plan);
+	await appendCodeStage(context, {
+		state: "REVIEW",
+		domain: input.domain,
+	});
 }
