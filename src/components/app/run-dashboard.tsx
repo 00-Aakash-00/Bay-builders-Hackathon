@@ -18,6 +18,7 @@ import type {
 	ScoreBreakdown,
 } from "@/lib/schemas";
 import { RunEventSchema } from "@/lib/schemas";
+import { CandidateTracker } from "./candidate-tracker";
 import { IcpPicker } from "./icp-picker";
 import { LeadCard } from "./lead-card";
 import { RadarFeed } from "./radar-feed";
@@ -274,6 +275,8 @@ export function RunDashboard({
 	const [optimisticSent, setOptimisticSent] = useState<Set<string>>(
 		() => new Set(),
 	);
+	const [dismissedCandidateRejections, setDismissedCandidateRejections] =
+		useState<Set<number>>(() => new Set());
 	const [connection, setConnection] = useState<
 		"connecting" | "live" | "reconnecting"
 	>("connecting");
@@ -360,6 +363,14 @@ export function RunDashboard({
 		},
 		[runId],
 	);
+	const dismissCandidateRejection = useCallback((rejectionSeq: number) => {
+		setDismissedCandidateRejections((current) => {
+			if (current.has(rejectionSeq)) return current;
+			const next = new Set(current);
+			next.add(rejectionSeq);
+			return next;
+		});
+	}, []);
 
 	return (
 		<main className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col gap-24 px-16 py-24 sm:px-24 lg:py-32">
@@ -419,6 +430,13 @@ export function RunDashboard({
 									onConfirm={confirmIcp}
 								/>
 							) : null}
+
+							<CandidateTracker
+								dismissedRejections={dismissedCandidateRejections}
+								events={state.events}
+								onDismissRejected={dismissCandidateRejection}
+								runState={state.runState}
+							/>
 
 							{state.leads.map((lead) => {
 								const draftRecord = state.drafts[lead.id];

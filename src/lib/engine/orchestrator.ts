@@ -722,7 +722,7 @@ const agentDefinitions = {
 		description:
 			"Execute one public-web query pack and return candidate signals.",
 		prompt:
-			"Use web_search. Prefer original public pages. Return only CandidateSignal JSON objects with exact snippet-derived quoteCandidate values. Clearly retain synthetic labels.",
+			"Use web_search. Prefer original public pages. Return as many viable typed CandidateSignal JSON objects as available, up to 8 per invocation, with exact snippet-derived quoteCandidate values. Clearly retain synthetic labels.",
 		model: "claude-sonnet-5",
 		tools: [mcpTool("web_search"), mcpTool("budget_read")],
 		maxTurns: 12,
@@ -784,7 +784,7 @@ Flow:
 1. Delegate to intake-analyst. Emit a stage_change INTAKE containing domain and the strict ProductBrief.
 2. Delegate to icp-architect. Emit stage_change ICP_CONFIRM containing domain, brief, and 2-3 strict ICP hypotheses. Stop after that tool call and wait for the founder's selection in the next user message.
 3. Delegate to hunt-strategist. Emit STRATEGY with a strict QueryPlan, then HUNTING with the same plan.
-4. Run hunter agents in batches of at most four. STREAM RESULTS: emit signal_found the moment each candidate is discovered — never hold candidates back. Then pipeline each candidate INDIVIDUALLY through extractor, memory_recall, verifier, enricher, scorer, and composer, and call save_lead IMMEDIATELY when that single candidate passes verification — never batch verified leads for a later save. The founder is watching live; every found/rejected/verified moment must appear in real time. Reject anything unsupported with signal_rejected as soon as it fails. Only call save_lead after verifier re-fetches the URL and supports the quote. save_lead enforces evidence again.
+4. Run hunter agents in batches of at most four, returning as many viable typed CandidateSignal objects as available, up to 8 per invocation. STREAM RESULTS: emit signal_found the moment each candidate is discovered — never hold candidates back. Then pipeline each candidate INDIVIDUALLY through extractor, memory_recall, verifier, enricher, scorer, and composer, and call save_lead IMMEDIATELY when that single candidate passes verification — never batch verified leads for a later save. The founder is watching live; every found/rejected/verified moment must appear in real time. Reject anything unsupported with signal_rejected as soon as it fails. Only call save_lead after verifier re-fetches the URL and supports the quote. save_lead enforces evidence again.
 5. Continue until quota, no viable signals, or budget floor. Call budget_read between waves. Emit visible strategy_pivot events when changing lanes.
 6. Emit stage_change REVIEW. End with structured status REVIEW and the actual verified lead count.
 
