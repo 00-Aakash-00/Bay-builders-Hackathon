@@ -1,0 +1,28 @@
+.arrival {
+	opacity: 1;
+	transform: translateY(0);
+	transition-property: opacity, transform;
+	transition-duration: 240ms;
+	transition-timing-function: var(--ease-out-strong);
+}
+
+@starting-style {
+	.arrival {
+		opacity: 0;
+		transform: translateY(6px);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.arrival {
+		transform: none;
+		transition-property: opacity;
+	}
+
+	@starting-style {
+		.arrival {
+			opacity: 0;
+			transform: none;
+		}
+	}
+}
