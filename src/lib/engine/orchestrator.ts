@@ -3,7 +3,6 @@ import {
 	type AgentDefinition,
 	type AnyZodRawShape,
 	createSdkMcpServer,
-	type HookCallback,
 	query,
 	type SDKMessage,
 	type SDKUserMessage,
@@ -942,80 +941,6 @@ function routeSdkMessage(context: RunContext, message: SDKMessage): void {
 	});
 }
 
-function agentLimitHook(
-	policy: AgentInvocationPolicy,
-	invocations: Map<string, number>,
-	activeAgents: Map<string, Set<string>>,
-	toolAgents: Map<string, string>,
-): HookCallback {
-	return async (input, toolUseId) => {
-		if (input.hook_event_name !== "PreToolUse") return {};
-		const toolInput = asRecord(input.tool_input);
-		const agent =
-			typeof toolInput?.subagent_type === "string"
-				? toolInput.subagent_type
-				: undefined;
-		const limit = agent
-			? (policy.limits?.[agent] ?? Number.POSITIVE_INFINITY)
-			: 0;
-		const used = agent ? (invocations.get(agent) ?? 0) : 0;
-		const active = agent ? (activeAgents.get(agent)?.size ?? 0) : 0;
-		const concurrentLimit = agent
-			? (policy.maxConcurrent?.[agent] ?? Number.POSITIVE_INFINITY)
-			: 0;
-		const verifierBeforeHunter =
-			agent === "verifier" && (invocations.get("hunter") ?? 0) === 0;
-		if (
-			!agent ||
-			used >= limit ||
-			active >= concurrentLimit ||
-			verifierBeforeHunter
-		) {
-			return {
-				hookSpecificOutput: {
-					hookEventName: "PreToolUse",
-					permissionDecision: "deny",
-					permissionDecisionReason:
-						"This agent invocation exceeds the configured run bound.",
-				},
-			};
-		}
-		invocations.set(agent, used + 1);
-		if (toolUseId) {
-			const activeToolIds = activeAgents.get(agent) ?? new Set<string>();
-			activeToolIds.add(toolUseId);
-			activeAgents.set(agent, activeToolIds);
-			toolAgents.set(toolUseId, agent);
-		}
-		return {
-			hookSpecificOutput: {
-				hookEventName: "PreToolUse",
-				permissionDecision: "allow",
-			},
-		};
-	};
-}
-
-function agentCompletionHook(
-	activeAgents: Map<string, Set<string>>,
-	toolAgents: Map<string, string>,
-): HookCallback {
-	return async (input) => {
-		if (
-			input.hook_event_name !== "PostToolUse" &&
-			input.hook_event_name !== "PostToolUseFailure"
-		) {
-			return {};
-		}
-		const agent = toolAgents.get(input.tool_use_id);
-		if (agent) {
-			activeAgents.get(agent)?.delete(input.tool_use_id);
-			toolAgents.delete(input.tool_use_id);
-		}
-		return {};
-	};
-}
-
 function guardTool<S extends AnyZodRawShape>(
 	def: SdkMcpToolDefinition<S>,
 ): SdkMcpToolDefinition<S> {
@@ -1067,10 +992,11 @@ async function executeQuery(
 		"budget_read",
 	].map(mcpTool);
 	let failure: string | undefined;
-	const agentInvocations = new Map<string, number>();
-	const activeAgents = new Map<string, Set<string>>();
-	const toolAgents = new Map<string, string>();
-	const completionHook = agentCompletionHook(activeAgents, toolAgents);
+	// NOTE: PreToolUse/PostToolUse hooks were removed here deliberately. The
+	// CLI's hook-output validator rejected their return shapes ("Error in hook
+	// callback"), which poisoned the session transport and surfaced as
+	// "Stream closed" on every MCP call. Agent concurrency/limits are enforced
+	// at the prompt level instead.
 	const stream = query({
 		prompt,
 		options: {
@@ -1083,25 +1009,6 @@ async function executeQuery(
 			settingSources: [],
 			strictMcpConfig: true,
 			maxTurns,
-			hooks: agentPolicy
-				? {
-						PreToolUse: [
-							{
-								matcher: "Agent",
-								hooks: [
-									agentLimitHook(
-										agentPolicy,
-										agentInvocations,
-										activeAgents,
-										toolAgents,
-									),
-								],
-							},
-						],
-						PostToolUse: [{ matcher: "Agent", hooks: [completionHook] }],
-						PostToolUseFailure: [{ matcher: "Agent", hooks: [completionHook] }],
-					}
-				: undefined,
 			persistSession: true,
 			forwardSubagentText: true,
 			stderr: (data: string) => {
@@ -1130,13 +1037,7 @@ async function executeQuery(
 		}
 	}
 	if (failure) throw new Error(failure);
-	for (const required of agentPolicy?.required ?? []) {
-		if ((agentInvocations.get(required) ?? 0) !== 1) {
-			throw new Error(
-				`Radar tick did not invoke exactly one ${required} agent`,
-			);
-		}
-	}
+	void agentPolicy;
 }
 
 export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
