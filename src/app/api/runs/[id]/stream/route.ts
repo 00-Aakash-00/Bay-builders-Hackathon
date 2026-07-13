@@ -1,71 +1,97 @@
-import { getRun, subscribe } from "@/lib/run-store";
+import { engineWorkerUrl, workerOfflineResponse } from "@/lib/worker-client";
 
-const encoder = new TextEncoder();
-
-function parseLastEventId(request: Request): number {
-	const value = Number.parseInt(
-		request.headers.get("last-event-id") ?? "0",
-		10,
-	);
-	return Number.isSafeInteger(value) && value >= 0 ? value : 0;
-}
+export const runtime = "nodejs";
 
 export async function GET(
 	request: Request,
 	{ params }: { params: Promise<{ id: string }> },
 ) {
 	const { id } = await params;
-	if (!getRun(id)) {
-		return Response.json({ error: "Run not found" }, { status: 404 });
+	const url = engineWorkerUrl(`/runs/${encodeURIComponent(id)}/events`);
+	url.search = new URL(request.url).search;
+	const lastEventId = request.headers.get("last-event-id");
+	const upstreamController = new AbortController();
+	const abortUpstream = () => upstreamController.abort();
+	if (request.signal.aborted) {
+		abortUpstream();
+	} else {
+		request.signal.addEventListener("abort", abortUpstream, { once: true });
 	}
 
-	let cleanup = () => {};
-	const stream = new ReadableStream<Uint8Array>({
-		start(controller) {
-			let active = true;
-			const unsubscribe = subscribe(id, parseLastEventId(request), (event) => {
-				controller.enqueue(
-					encoder.encode(
-						`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`,
-					),
-				);
-			});
-			const heartbeat = setInterval(() => {
-				controller.enqueue(encoder.encode(": heartbeat\n\n"));
-			}, 15_000);
+	let upstream: Response;
+	try {
+		upstream = await fetch(url, {
+			...(lastEventId === null
+				? {}
+				: { headers: { "Last-Event-ID": lastEventId } }),
+			cache: "no-store",
+			signal: upstreamController.signal,
+		});
+	} catch (error) {
+		request.signal.removeEventListener("abort", abortUpstream);
+		upstreamController.abort();
+		if (request.signal.aborted) throw error;
+		return workerOfflineResponse();
+	}
 
-			const dispose = () => {
-				if (!active) {
+	if (!upstream.ok || !upstream.body) {
+		try {
+			const body = await upstream.arrayBuffer();
+			const contentType = upstream.headers.get("content-type");
+			return new Response(body, {
+				status: upstream.status,
+				statusText: upstream.statusText,
+				...(contentType ? { headers: { "Content-Type": contentType } } : {}),
+			});
+		} finally {
+			request.signal.removeEventListener("abort", abortUpstream);
+			upstreamController.abort();
+		}
+	}
+
+	const reader = upstream.body.getReader();
+	let disposed = false;
+	const dispose = () => {
+		if (disposed) return;
+		disposed = true;
+		request.signal.removeEventListener("abort", abortUpstream);
+		upstreamController.abort();
+	};
+	const stream = new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			try {
+				const { done, value } = await reader.read();
+				if (done) {
+					dispose();
+					controller.close();
 					return;
 				}
-				active = false;
-				clearInterval(heartbeat);
-				unsubscribe();
-				request.signal.removeEventListener("abort", abort);
-			};
-			const abort = () => {
+				controller.enqueue(value);
+			} catch (error) {
 				dispose();
-				controller.close();
-			};
-
-			cleanup = dispose;
-			if (request.signal.aborted) {
-				abort();
-			} else {
-				request.signal.addEventListener("abort", abort, { once: true });
+				if (request.signal.aborted) {
+					controller.close();
+				} else {
+					controller.error(error);
+				}
 			}
 		},
-		cancel() {
-			cleanup();
+		async cancel() {
+			dispose();
+			await reader.cancel().catch(() => undefined);
 		},
 	});
 
 	return new Response(stream, {
+		status: upstream.status,
 		headers: {
-			"Cache-Control": "no-cache, no-transform",
+			"Cache-Control":
+				upstream.headers.get("cache-control") ?? "no-cache, no-transform",
 			Connection: "keep-alive",
-			"Content-Type": "text/event-stream; charset=utf-8",
-			"X-Accel-Buffering": "no",
+			"Content-Type":
+				upstream.headers.get("content-type") ??
+				"text/event-stream; charset=utf-8",
+			"X-Accel-Buffering": upstream.headers.get("x-accel-buffering") ?? "no",
 		},
 	});
 }

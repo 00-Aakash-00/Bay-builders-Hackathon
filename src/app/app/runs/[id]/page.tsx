@@ -1,6 +1,12 @@
 import Link from "next/link";
 import { RunDashboard } from "@/components/app/run-dashboard";
-import { getRun } from "@/lib/run-store";
+import type { RunRecord } from "@/lib/run-store";
+import { engineWorkerUrl } from "@/lib/worker-client";
+
+type RunSnapshot = Pick<
+	RunRecord,
+	"id" | "domain" | "depth" | "state" | "mode" | "createdAt" | "budget"
+>;
 
 export default async function RunPage({
 	params,
@@ -8,7 +14,16 @@ export default async function RunPage({
 	params: Promise<{ id: string }>;
 }) {
 	const { id } = await params;
-	const run = getRun(id);
+	const response = await fetch(
+		engineWorkerUrl(`/runs/${encodeURIComponent(id)}`),
+		{ cache: "no-store" },
+	);
+	if (!response.ok && response.status !== 404) {
+		throw new Error(`Engine worker returned ${response.status}`);
+	}
+	const run: RunSnapshot | undefined = response.ok
+		? ((await response.json()) as RunSnapshot)
+		: undefined;
 
 	if (!run) {
 		return (

@@ -90,6 +90,19 @@ const CompletionSchema = z
 	})
 	.strict();
 
+const eventPayloadReference = `EVENT PAYLOAD REFERENCE (strict JSON; no extra keys; ? = optional):
+stage_change: { state: INTAKE|ICP_CONFIRM|STRATEGY|HUNTING|REVIEW|DELIVERED|RADAR|FAILED|KILLED, domain?: string, brief?: ProductBrief, icps?: ICPHypothesis[2..3] (key is "icps", never "hypotheses"), queryPlan?: QueryPlan }
+agent_started: { agent: string, message: string } · tool_call: { tool: string, action: string }
+signal_found: CandidateSignal { url: http(s) URL, channel: reddit|hn|x|reviews|github|jobs|forums|news, title: string, authorHandle?: string, quoteCandidate: string, publishedAt?: ISO datetime with offset, foundBy: string } · signal_rejected: { signal: CandidateSignal, reason: string }
+lead_verified: Lead · lead_scored: { leadId: string, score: ScoreBreakdown } · draft_ready: { draft: OutreachDraft, status: draft|sent } · radar_alert: Lead
+strategy_pivot: { rationale: string } · budget_update: { spent: number >= 0, total: number >= 0, provider?: tavily|youcom|nimble } · error: { message: string, recoverable: boolean }
+ProductBrief (all fields required): { domain: string, product: string, outcome: string, buyer: string, user: string, priceMotion: string, geography: string, topUseCase: string, inferences: string[] }
+ICPHypothesis (all fields required): { id: string, persona: string, industry: string, companySize: string, painTriggers: string[1..], positiveSignals: string[1..], disqualifiers: string[] (may be []), vocabulary: string[1..] }
+QueryPlan: { icpId: string, packs: { bucket: demand|pain|workaround|switching|timing, channel: reddit|hn|x|reviews|github|jobs|forums|news, provider: tavily|youcom|nimble, queries: string[1..] }[1..], budget: { providers: { provider: tavily|youcom|nimble, allocated: number >= 0 }[1..] } }
+ScoreBreakdown: { pain: 0..5, fit: 0..5, timing: 0..5, reachability: 0..5, evidenceQuality: 0..5, total: 0..100, stage: high_intent|problem_aware|trigger_present }
+OutreachDraft: { leadId: string, channel: string, subject?: string, body: string (1..90 words), groundedIn: http(s) URL[1..] }
+emit_event accepts only stage_change|agent_started|tool_call|signal_found|signal_rejected|strategy_pivot|error. save_lead/system code emits lead_verified|lead_scored|draft_ready|radar_alert|budget_update.`;
+
 const mirrorTypes = new Set<RunEvent["type"]>([
 	"stage_change",
 	"strategy_pivot",
@@ -509,6 +522,39 @@ function assertValidStageChange(
 
 function createTools(context: RunContext) {
 	const providerSchema = z.enum(["tavily", "youcom", "nimble"]);
+	const saveLeadExample = JSON.stringify({
+		id: "lead-1",
+		runId: context.runId,
+		name: "Ari Chen",
+		type: "person",
+		signal: {
+			url: "https://example.com/thread/1",
+			channel: "forums",
+			quote: "Manual intake costs us hours every week.",
+			publishedAt: "2026-07-01T12:00:00Z",
+			sourceType: "forum_post",
+			hash: "0".repeat(64),
+		},
+		score: {
+			pain: 4,
+			fit: 4,
+			timing: 4,
+			reachability: 4,
+			evidenceQuality: 4,
+			total: 80,
+			stage: "problem_aware",
+		},
+		enrichment: {
+			channel: {
+				kind: "thread_reply",
+				value: "Reply in source thread",
+				provenanceUrl: "https://example.com/thread/1",
+			},
+			reachabilityConfidence: "high",
+		},
+		whyFit: "Matches the confirmed ICP.",
+		whyNow: "They described a current recurring problem.",
+	});
 	return [
 		tool(
 			"web_search",
@@ -574,7 +620,7 @@ function createTools(context: RunContext) {
 		),
 		tool(
 			"save_lead",
-			"Validate and save one fully composed lead. This independently re-fetches and quote-matches evidence; it is the only path that can emit a verified lead.",
+			`Validate and save one fully composed lead. This independently re-fetches and quote-matches evidence; it is the only path that can emit a verified lead. Fully-valid fictional Lead example (copy the shape, replace the values): ${saveLeadExample}`,
 			{
 				candidate: CandidateSignalSchema,
 				lead: LeadSchema,
@@ -585,7 +631,7 @@ function createTools(context: RunContext) {
 		),
 		tool(
 			"emit_event",
-			"Append a validated run event. Never use this for lead_verified or radar_alert; use save_lead.",
+			`Append a validated run event. Never use this for lead_verified or radar_alert; use save_lead.\n${eventPayloadReference}`,
 			{
 				lane: z.string().min(1),
 				type: z.enum([
@@ -741,7 +787,9 @@ Flow:
 5. Continue until quota, no viable signals, or budget floor. Call budget_read between waves. Emit visible strategy_pivot events when changing lanes.
 6. Emit stage_change REVIEW. End with structured status REVIEW and the actual verified lead count.
 
-Every emit_event payload must exactly match the existing RunEvent schema. Never emit lead_verified or radar_alert directly.`;
+Every emit_event payload must exactly match the existing RunEvent schema. Never emit lead_verified or radar_alert directly.
+
+${eventPayloadReference}`;
 }
 
 async function* gatedOrchestrationPrompt(
@@ -1076,14 +1124,63 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
 	emitBudget(context);
 	await persistRunState(context);
 
-	await executeQuery(
-		context,
-		gatedOrchestrationPrompt(context),
-		agentDefinitions,
-		250,
-		"claude-opus-4-8",
-		{ maxConcurrent: { hunter: 4 } },
-	);
+	let firstAttemptFailed = false;
+	let firstAttemptError: unknown;
+	try {
+		await executeQuery(
+			context,
+			gatedOrchestrationPrompt(context),
+			agentDefinitions,
+			250,
+			"claude-opus-4-8",
+			{ maxConcurrent: { hunter: 4 } },
+		);
+	} catch (error) {
+		firstAttemptFailed = true;
+		firstAttemptError = error;
+	}
+
+	const firstAttemptRun = getRun(input.runId);
+	if (firstAttemptFailed || firstAttemptRun?.state !== "REVIEW") {
+		if (!firstAttemptRun?.selectedIcpId) {
+			if (firstAttemptFailed) throw firstAttemptError;
+			throw new Error(
+				"Claude completed before the confirmed-ICP hunt finished",
+			);
+		}
+
+		const verifiedLeadCount = firstAttemptRun.leads.size;
+		const remainingQuota = Math.max(context.quota - verifiedLeadCount, 0);
+		const stageCheckpoint = firstAttemptRun.events
+			.filter((event) => event.type === "stage_change")
+			.map((event) => event.payload);
+		appendEngineEvent(input.runId, {
+			lane: "system",
+			type: "agent_started",
+			payload: {
+				agent: "system",
+				message: "resuming interrupted hunt — attempt 2",
+			},
+		});
+		await executeQuery(
+			context,
+			`This is a resumed hunt for CustomerZero run ${context.runId}; the previous session was interrupted or ended before clean completion. Continue from where it stopped without repeating INTAKE or ICP_CONFIRM.
+Domain: ${context.domain}
+Current run state: ${firstAttemptRun.state}
+Confirmed ICP id: ${firstAttemptRun.selectedIcpId}
+Current verified-lead count: ${verifiedLeadCount}
+Remaining quota: ${remainingQuota} of ${context.quota}
+Persisted stage checkpoint: ${JSON.stringify(stageCheckpoint)}
+
+Use the Agent tool for specialists and only CustomerZero MCP tools for external actions. If the state is ICP_CONFIRM, create the confirmed ICP's strategy and transition through STRATEGY to HUNTING. If it is STRATEGY, continue with its saved QueryPlan into HUNTING. If it is HUNTING, resume hunter waves and the extractor, memory_recall, verifier, enricher, scorer, composer, and save_lead pipeline. If it is already REVIEW, do not reopen the hunt. Respect the remaining quota and current budget. Emit stage_change REVIEW when the hunt is done, then end with structured status REVIEW and the actual verified lead count.
+
+${eventPayloadReference}`,
+			agentDefinitions,
+			250,
+			"claude-opus-4-8",
+			{ maxConcurrent: { hunter: 4 } },
+		);
+	}
 	const completedRun = getRun(input.runId);
 	if (completedRun?.state !== "REVIEW") {
 		if (completedRun?.state !== "HUNTING" || !completedRun.selectedIcpId) {
