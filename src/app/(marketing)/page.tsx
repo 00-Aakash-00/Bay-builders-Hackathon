@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { HeroImage } from "@/components/marketing/hero-image";
+import { HeroWorld } from "@/components/marketing/hero-world";
 import { LeadCard } from "@/components/marketing/lead-card";
 import styles from "@/components/marketing/marketing.module.css";
 import { Reveal } from "@/components/marketing/reveal";
@@ -128,6 +129,10 @@ export default function MarketingPage() {
 						<HeroImage />
 					</div>
 				</div>
+			</section>
+
+			<section aria-label="Evidence flight" className="border-b border-mist">
+				<HeroWorld />
 			</section>
 
 			<section
