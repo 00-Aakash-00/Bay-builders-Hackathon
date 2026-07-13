@@ -44,6 +44,7 @@ interface StoredRun extends RunRecord {
 	subscribers: Set<Subscriber>;
 	icpGate: IcpGate;
 	radarLead?: Lead;
+	radarRunner?: () => Promise<Lead | undefined>;
 }
 
 const globalForRunStore = globalThis as typeof globalThis & {
@@ -164,7 +165,11 @@ export function subscribe(
 	};
 }
 
-async function driveMockRun(run: StoredRun): Promise<void> {
+export async function driveMockRun(runId: string): Promise<void> {
+	const run = runs.get(runId);
+	if (!run) {
+		throw new Error(`Unknown run: ${runId}`);
+	}
 	const steps = createMockRunScript({
 		runId: run.id,
 		domain: run.domain,
@@ -182,7 +187,7 @@ async function driveMockRun(run: StoredRun): Promise<void> {
 	}
 }
 
-export function createRun(domain: string, depth: RunDepth = 10): RunRecord {
+function createStoredRun(domain: string, depth: RunDepth): StoredRun {
 	const id = crypto.randomUUID();
 	const createdAt = new Date().toISOString();
 	const run: StoredRun = {
@@ -200,9 +205,21 @@ export function createRun(domain: string, depth: RunDepth = 10): RunRecord {
 	};
 
 	runs.set(id, run);
-	void driveMockRun(run).catch((error: unknown) => {
-		append(id, {
-			runId: id,
+	return run;
+}
+
+export function createEngineRun(
+	domain: string,
+	depth: RunDepth = 10,
+): RunRecord {
+	return createStoredRun(domain, depth);
+}
+
+export function createRun(domain: string, depth: RunDepth = 10): RunRecord {
+	const run = createStoredRun(domain, depth);
+	void driveMockRun(run.id).catch((error: unknown) => {
+		append(run.id, {
+			runId: run.id,
 			ts: new Date().toISOString(),
 			seq: nextSequence(run),
 			lane: "system",
@@ -215,6 +232,32 @@ export function createRun(domain: string, depth: RunDepth = 10): RunRecord {
 	});
 
 	return run;
+}
+
+export async function waitForIcpConfirmation(runId: string): Promise<string> {
+	const run = runs.get(runId);
+	if (!run) {
+		throw new Error(`Unknown run: ${runId}`);
+	}
+
+	await run.icpGate.promise;
+	if (!run.selectedIcpId) {
+		throw new Error(`Run ${runId} resumed without an ICP selection`);
+	}
+
+	return run.selectedIcpId;
+}
+
+export function registerRadarRunner(
+	runId: string,
+	runner: () => Promise<Lead | undefined>,
+): void {
+	const run = runs.get(runId);
+	if (!run) {
+		throw new Error(`Unknown run: ${runId}`);
+	}
+
+	run.radarRunner = runner;
 }
 
 export function confirmIcp(runId: string, icpId: string): boolean {
@@ -282,6 +325,22 @@ export function approveLead(
 export function triggerRadar(runId: string): Lead | undefined {
 	const run = runs.get(runId);
 	if (!run) {
+		return undefined;
+	}
+	if (run.radarRunner) {
+		void run.radarRunner().catch((error: unknown) => {
+			append(runId, {
+				runId,
+				ts: new Date().toISOString(),
+				seq: nextSequence(run),
+				lane: "system",
+				type: "error",
+				payload: {
+					message: error instanceof Error ? error.message : "Radar tick failed",
+					recoverable: true,
+				},
+			});
+		});
 		return undefined;
 	}
 

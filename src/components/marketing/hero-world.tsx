@@ -13,7 +13,7 @@ export function HeroWorld() {
 	const pendingTime = useRef<number | null>(null);
 	const [reduced, setReduced] = useState(false);
 	const [painted, setPainted] = useState(false);
-	const [settled, setSettled] = useState(false);
+	const [dismissed, setDismissed] = useState(false);
 
 	useEffect(() => {
 		const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -70,7 +70,7 @@ export function HeroWorld() {
 					return;
 				}
 				const progress = Math.min(1, Math.max(0, -rect.top / runway));
-				setSettled(progress > 0.6);
+				setDismissed(progress > 0.3);
 				if (Number.isFinite(video.duration) && video.duration > 0) {
 					seekTo(progress * (video.duration - 0.05));
 				}
@@ -90,9 +90,9 @@ export function HeroWorld() {
 	const copy = (
 		<div
 			className={`max-w-md transition-[opacity,transform] duration-[240ms] ease-out-strong motion-reduce:transition-none ${
-				settled || reduced
-					? "translate-y-0 opacity-100"
-					: "pointer-events-none translate-y-[10px] opacity-0"
+				dismissed && !reduced
+					? "pointer-events-none -translate-y-[10px] opacity-0"
+					: "translate-y-0 opacity-100"
 			}`}
 		>
 			<p className="text-caption font-semibold uppercase tracking-[0.16em] text-iron">

@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { HeroImage } from "@/components/marketing/hero-image";
 import { HeroWorld } from "@/components/marketing/hero-world";
 import { LeadCard } from "@/components/marketing/lead-card";
 import styles from "@/components/marketing/marketing.module.css";
@@ -91,46 +90,6 @@ export default function MarketingPage() {
 			id="main-content"
 			tabIndex={-1}
 		>
-			<section aria-labelledby="hero-title" className="border-b border-mist">
-				<div className="mx-auto grid w-full max-w-7xl gap-48 px-16 py-56 sm:px-24 md:py-72 lg:grid-cols-2 lg:items-center lg:px-32">
-					<div className={styles.heroEntrance}>
-						<p className="text-caption font-semibold uppercase text-iron">
-							Evidence-backed founder sales
-						</p>
-						<h1
-							className="mt-16 max-w-2xl font-fraktion text-display font-semibold text-obsidian"
-							id="hero-title"
-						>
-							Your first 10 customers, with receipts.
-						</h1>
-						<p className="mt-24 max-w-xl text-body text-iron">
-							{heroDescription}
-						</p>
-						<div className="mt-32 flex flex-wrap items-center gap-16">
-							<Link
-								className="rounded-sm bg-glacier-tint px-24 py-16 text-body-sm font-semibold text-obsidian shadow-sm transition-transform duration-[160ms] ease-out-strong hover:shadow-sm-2 active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-obsidian"
-								href="/app"
-							>
-								Find my customers
-							</Link>
-							<a
-								className="px-8 py-8 text-body-sm font-semibold text-iron hover:text-obsidian hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-obsidian"
-								href="#how-it-works"
-							>
-								See how it works
-							</a>
-						</div>
-					</div>
-
-					<div
-						aria-hidden="true"
-						className={`${styles.heroEntrance} ${styles.heroVisual} relative aspect-[4/3] overflow-hidden rounded-sm border border-mist bg-cloud shadow-sm`}
-					>
-						<HeroImage />
-					</div>
-				</div>
-			</section>
-
 			<HeroWorld />
 
 			<section

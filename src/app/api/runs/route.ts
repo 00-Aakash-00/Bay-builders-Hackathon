@@ -1,4 +1,5 @@
-import { createRun, type RunDepth } from "@/lib/run-store";
+import { startEngineRun } from "@/lib/engine";
+import { createEngineRun, type RunDepth } from "@/lib/run-store";
 
 const depths: RunDepth[] = [5, 10, 20];
 
@@ -36,6 +37,8 @@ export async function POST(request: Request) {
 		);
 	}
 
-	const run = createRun(domain, depth as RunDepth);
+	const runDepth = depth as RunDepth;
+	const run = createEngineRun(domain, runDepth);
+	void startEngineRun(run.id, domain, runDepth);
 	return Response.json({ id: run.id }, { status: 201 });
 }
