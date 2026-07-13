@@ -17,7 +17,7 @@ export async function oneShot<T>(opts: {
 			settingSources: [],
 			strictMcpConfig: true,
 			permissionMode: "dontAsk",
-			maxTurns: 1,
+			maxTurns: 4,
 			persistSession: false,
 			stderr: (data: string) => {
 				const text = String(data).trim();

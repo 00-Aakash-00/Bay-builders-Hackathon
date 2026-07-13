@@ -49,13 +49,23 @@ export default async function RunPage({
 	}
 
 	return (
-		<RunDashboard
-			runId={run.id}
-			mode={run.mode}
-			initialDomain={run.domain}
-			initialState={run.state}
-			createdAt={run.createdAt}
-			initialBudget={run.budget}
-		/>
+		<>
+			<div className="mx-auto w-full max-w-screen-2xl px-16 pt-24 sm:px-24">
+				<Link
+					href="/app"
+					className="text-caption text-iron hover:text-obsidian"
+				>
+					← All runs
+				</Link>
+			</div>
+			<RunDashboard
+				runId={run.id}
+				mode={run.mode}
+				initialDomain={run.domain}
+				initialState={run.state}
+				createdAt={run.createdAt}
+				initialBudget={run.budget}
+			/>
+		</>
 	);
 }

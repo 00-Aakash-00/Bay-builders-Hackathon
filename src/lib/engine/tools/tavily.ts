@@ -47,8 +47,16 @@ const FAILURE_THRESHOLD = 3;
 const REQUEST_TIMEOUT_MS = 15_000;
 
 const budgets = new Map<string, RunBudget>();
-let consecutiveFailures = 0;
-let breakerOpenUntil = 0;
+
+// The circuit breaker must be per-run. When it was module-global, one run's
+// transient Tavily failures (a single 429 or 3 consecutive 5xx) opened the
+// breaker for every concurrent run in the long-lived worker — starving an
+// unrelated parallel run of Tavily and silently costing it leads.
+interface BreakerState {
+	consecutiveFailures: number;
+	breakerOpenUntil: number;
+}
+const breakers = new Map<string, BreakerState>();
 
 function getBudget(runId: string): RunBudget {
 	let budget = budgets.get(runId);
@@ -57,6 +65,15 @@ function getBudget(runId: string): RunBudget {
 		budgets.set(runId, budget);
 	}
 	return budget;
+}
+
+function getBreaker(runId: string): BreakerState {
+	let breaker = breakers.get(runId);
+	if (!breaker) {
+		breaker = { consecutiveFailures: 0, breakerOpenUntil: 0 };
+		breakers.set(runId, breaker);
+	}
+	return breaker;
 }
 
 function reserveBudget(runId: string, credits: number): void {
@@ -78,30 +95,32 @@ function commitBudget(runId: string, reserved: number, spent: number): void {
 	budget.spent += spent;
 }
 
-function ensureCircuitClosed(): void {
-	if (Date.now() < breakerOpenUntil) {
+function ensureCircuitClosed(runId: string): void {
+	if (Date.now() < getBreaker(runId).breakerOpenUntil) {
 		throw new Error("Tavily circuit breaker is open");
 	}
 }
 
-function recordFailure(rateLimited: boolean): void {
+function recordFailure(runId: string, rateLimited: boolean): void {
+	const breaker = getBreaker(runId);
 	if (rateLimited) {
-		consecutiveFailures = 0;
-		breakerOpenUntil = Date.now() + BREAKER_DURATION_MS;
+		breaker.consecutiveFailures = 0;
+		breaker.breakerOpenUntil = Date.now() + BREAKER_DURATION_MS;
 		return;
 	}
 
-	consecutiveFailures += 1;
-	if (consecutiveFailures >= FAILURE_THRESHOLD) {
-		consecutiveFailures = 0;
-		breakerOpenUntil = Date.now() + BREAKER_DURATION_MS;
+	breaker.consecutiveFailures += 1;
+	if (breaker.consecutiveFailures >= FAILURE_THRESHOLD) {
+		breaker.consecutiveFailures = 0;
+		breaker.breakerOpenUntil = Date.now() + BREAKER_DURATION_MS;
 	}
 }
 
-function recordSuccess(): void {
-	consecutiveFailures = 0;
-	if (Date.now() >= breakerOpenUntil) {
-		breakerOpenUntil = 0;
+function recordSuccess(runId: string): void {
+	const breaker = getBreaker(runId);
+	breaker.consecutiveFailures = 0;
+	if (Date.now() >= breaker.breakerOpenUntil) {
+		breaker.breakerOpenUntil = 0;
 	}
 }
 
@@ -109,8 +128,9 @@ async function postTavily<T>(
 	path: "search" | "extract",
 	apiKey: string,
 	body: Record<string, unknown>,
+	runId: string,
 ): Promise<T> {
-	ensureCircuitClosed();
+	ensureCircuitClosed(runId);
 
 	let response: Response;
 	try {
@@ -124,21 +144,21 @@ async function postTavily<T>(
 			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 		});
 	} catch {
-		recordFailure(false);
+		recordFailure(runId, false);
 		throw new Error(`Tavily ${path} request failed`);
 	}
 
 	if (!response.ok) {
-		recordFailure(response.status === 429);
+		recordFailure(runId, response.status === 429);
 		throw new Error(`Tavily ${path} failed (${response.status})`);
 	}
 
 	try {
 		const payload = (await response.json()) as T;
-		recordSuccess();
+		recordSuccess(runId);
 		return payload;
 	} catch {
-		recordFailure(false);
+		recordFailure(runId, false);
 		throw new Error(`Tavily ${path} returned invalid JSON`);
 	}
 }
@@ -160,12 +180,17 @@ export async function searchTavily(
 	const reserved = 1;
 	reserveBudget(runId, reserved);
 	try {
-		const response = await postTavily<SearchResponse>("search", apiKey, {
-			query,
-			search_depth: "basic",
-			max_results: options?.maxResults ?? 5,
-			include_usage: true,
-		});
+		const response = await postTavily<SearchResponse>(
+			"search",
+			apiKey,
+			{
+				query,
+				search_depth: "basic",
+				max_results: options?.maxResults ?? 5,
+				include_usage: true,
+			},
+			runId,
+		);
 		const spent = responseCredits(response.usage) ?? 1;
 		const results = (response.results ?? []).map((result) => ({
 			title: result.title,
@@ -192,11 +217,16 @@ export async function extractTavily(
 	const reserved = Math.ceil(urls.length / 5);
 	reserveBudget(runId, reserved);
 	try {
-		const response = await postTavily<ExtractResponse>("extract", apiKey, {
-			urls,
-			extract_depth: "basic",
-			include_usage: true,
-		});
+		const response = await postTavily<ExtractResponse>(
+			"extract",
+			apiKey,
+			{
+				urls,
+				extract_depth: "basic",
+				include_usage: true,
+			},
+			runId,
+		);
 		const results = response.results ?? [];
 		const spent = responseCredits(response.usage) ?? results.length / 5;
 		const mappedResults = results.map((result) => ({

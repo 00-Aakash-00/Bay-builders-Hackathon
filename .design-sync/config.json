@@ -1,0 +1,23 @@
+{
+  "projectId": "c65c7768-a8bd-4c2f-961d-5eacbbe78840",
+  "shape": "package",
+  "pkg": "customerzero",
+  "globalName": "CustomerZero",
+  "srcDir": "src",
+  "tsconfig": ".design-sync/tsconfig.ds.json",
+  "cssEntry": ".design-sync/assets/ds-styles.css",
+  "readmeHeader": ".design-sync/conventions.md",
+  "runtimeFontPrefixes": ["Fraktion"],
+  "componentSrcMap": {
+    "CandidateTracker": "src/components/app/candidate-tracker.tsx",
+    "IcpPicker": "src/components/app/icp-picker.tsx",
+    "LeadCard": "src/components/app/lead-card.tsx",
+    "RadarFeed": "src/components/app/radar-feed.tsx",
+    "SwarmFeed": "src/components/app/swarm-feed.tsx",
+    "DitherPhoto": "src/components/marketing/dither-photo.tsx",
+    "ReceiptCard": "src/components/marketing/lead-card.tsx"
+  },
+  "dtsPropsFor": {
+    "ReceiptCard": "company: string; date: string; dateTime: string; name: string; persona: string; quote: string; rejected?: boolean; score: string; source: string; stage: string;"
+  }
+}

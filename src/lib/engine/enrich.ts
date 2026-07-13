@@ -375,7 +375,7 @@ export async function enrichLead(
 		const pageUrl = httpUrl(extract.url);
 		if (
 			!pageUrl ||
-			!extract.rawContent.trim() ||
+			!extract.rawContent?.trim() ||
 			(companyOrigin &&
 				pageUrl.hostname.replace(/^www\./u, "") !==
 					companyOrigin.hostname.replace(/^www\./u, ""))

@@ -37,6 +37,7 @@ let approveLead: typeof import("@/lib/run-store")["approveLead"];
 let confirmIcp: typeof import("@/lib/run-store")["confirmIcp"];
 let createEngineRun: typeof import("@/lib/run-store")["createEngineRun"];
 let getRun: typeof import("@/lib/run-store")["getRun"];
+let listRuns: typeof import("@/lib/run-store")["listRuns"];
 let subscribe: typeof import("@/lib/run-store")["subscribe"];
 let triggerRadar: typeof import("@/lib/run-store")["triggerRadar"];
 let startEngineRun: typeof import("@/lib/engine")["startEngineRun"];
@@ -336,6 +337,10 @@ async function handleRequest(
 		sendJson(response, result.status, result.body);
 		return;
 	}
+	if (request.method === "GET" && url.pathname === "/runs") {
+		sendJson(response, 200, listRuns());
+		return;
+	}
 
 	const segments = url.pathname.split("/").filter(Boolean);
 	const id = segments[0] === "runs" ? segments[1] : undefined;
@@ -401,6 +406,7 @@ async function main(): Promise<void> {
 		confirmIcp,
 		createEngineRun,
 		getRun,
+		listRuns,
 		subscribe,
 		triggerRadar,
 	} = runStore);
@@ -420,7 +426,7 @@ async function main(): Promise<void> {
 		});
 	});
 
-	server.listen(port, "127.0.0.1", () => {
+	server.listen(port, process.env.WORKER_HOST ?? "127.0.0.1", () => {
 		console.log(`[worker] Listening on http://127.0.0.1:${port}`);
 	});
 }

@@ -36,6 +36,13 @@ export interface RunRecord {
 	selectedIcpId?: string;
 }
 
+export type RunListSnapshot = Pick<
+	RunRecord,
+	"id" | "domain" | "depth" | "state" | "mode" | "createdAt" | "budget"
+> & {
+	leadCount: number;
+};
+
 type Subscriber = (event: RunEvent) => void;
 
 interface IcpGate {
@@ -146,6 +153,19 @@ export function get(runId: string): RunRecord | undefined {
 }
 
 export const getRun = get;
+
+export function listRuns(): RunListSnapshot[] {
+	return Array.from(runs.values(), (run) => ({
+		id: run.id,
+		domain: run.domain,
+		depth: run.depth,
+		state: run.state,
+		mode: run.mode,
+		createdAt: run.createdAt,
+		budget: run.budget,
+		leadCount: run.leads.size,
+	})).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
 
 export function subscribe(
 	runId: string,

@@ -4,9 +4,19 @@ const IsoDateTimeSchema = z.string().datetime({ offset: true });
 const UrlSchema = z
 	.string()
 	.url()
-	.refine((value) => ["http:", "https:"].includes(new URL(value).protocol), {
-		message: "URL must use http or https",
-	});
+	.refine(
+		(value) => {
+			// Zod 4's `.url()` is regex-based and accepts strings that `new URL()`
+			// rejects (e.g. "http://", URLs with spaces). Without this try/catch the
+			// thrown "Invalid URL" escapes safeParse uncaught and crashes the run.
+			try {
+				return ["http:", "https:"].includes(new URL(value).protocol);
+			} catch {
+				return false;
+			}
+		},
+		{ message: "URL must use http or https" },
+	);
 
 export const RunStateSchema = z.enum([
 	"INTAKE",
@@ -238,12 +248,16 @@ export const OutreachDraftSchema = z
 		leadId: z.string().min(1),
 		channel: z.string().min(1),
 		subject: z.string().min(1).optional(),
+		// The composer is prompted for <=90 words, but that is a soft product
+		// guideline, not a data invariant. A hard <=90 throw here discards a lead
+		// that already passed the gauntlet, quote gate, and score just because the
+		// LLM wrote 92 words. The ceiling only catches genuinely runaway output.
 		body: z
 			.string()
 			.trim()
 			.min(1)
-			.refine((body) => body.split(/\s+/u).length <= 90, {
-				message: "Outreach draft body must be 90 words or fewer",
+			.refine((body) => body.split(/\s+/u).length <= 130, {
+				message: "Outreach draft body must be 130 words or fewer",
 			}),
 		groundedIn: z.array(UrlSchema).min(1),
 	})

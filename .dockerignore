@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+public
+docs
+tasks
+.agents
+.claude
+.insforge
+*.md
+.env*

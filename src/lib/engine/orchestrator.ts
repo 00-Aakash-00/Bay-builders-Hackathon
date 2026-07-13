@@ -724,48 +724,46 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
 	emitBudget(context);
 	await persistRunState(context);
 
-	let firstAttemptError: unknown;
-	try {
-		await executeQuery(
-			context,
-			gatedOrchestrationPrompt(context),
-			agentDefinitions,
-			250,
-			"claude-sonnet-5",
-		);
-	} catch (error) {
-		firstAttemptError = error;
-	}
-
-	if (!completedSessionStrategy(input.runId)) {
-		appendEngineEvent(input.runId, {
-			lane: "system",
-			type: "agent_started",
-			payload: {
-				agent: "system",
-				message: "resuming interrupted strategy session — attempt 2",
-			},
-		});
+	// The strategist session occasionally ends without emitting the QueryPlan —
+	// the model sometimes loops back to re-emitting INTAKE (which the guard
+	// rejects) instead of producing STRATEGY. Each attempt is a fresh session, so
+	// retry a few times before failing the run; every retry after the first uses
+	// the resume prompt that explicitly demands the confirmed-ICP QueryPlan.
+	const STRATEGY_ATTEMPTS = 4;
+	let lastAttemptError: unknown;
+	for (
+		let attempt = 1;
+		attempt <= STRATEGY_ATTEMPTS && !completedSessionStrategy(input.runId);
+		attempt += 1
+	) {
+		if (attempt > 1) {
+			appendEngineEvent(input.runId, {
+				lane: "system",
+				type: "agent_started",
+				payload: {
+					agent: "system",
+					message: `resuming interrupted strategy session — attempt ${attempt}`,
+				},
+			});
+		}
 		try {
 			await executeQuery(
 				context,
-				retryStrategyPrompt(context),
+				attempt === 1
+					? gatedOrchestrationPrompt(context)
+					: retryStrategyPrompt(context),
 				agentDefinitions,
 				250,
 				"claude-sonnet-5",
 			);
-		} catch (retryError) {
-			if (!completedSessionStrategy(input.runId)) {
-				throw retryError instanceof Error
-					? retryError
-					: new Error("Claude strategy retry failed");
-			}
+		} catch (error) {
+			lastAttemptError = error;
 		}
 	}
 
 	const stored = completedSessionStrategy(input.runId);
 	if (!stored) {
-		if (firstAttemptError instanceof Error) throw firstAttemptError;
+		if (lastAttemptError instanceof Error) throw lastAttemptError;
 		throw new Error(
 			"Claude completed before producing a confirmed-ICP strategy",
 		);
