@@ -1030,7 +1030,7 @@ async function executeQuery(
 			forwardSubagentText: true,
 			outputFormat: {
 				type: "json_schema",
-				schema: z.toJSONSchema(CompletionSchema),
+				schema: z.toJSONSchema(CompletionSchema, { target: "draft-7" }),
 			},
 		},
 	});
