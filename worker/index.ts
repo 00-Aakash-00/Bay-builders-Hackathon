@@ -384,6 +384,11 @@ async function handleRequest(
 
 async function main(): Promise<void> {
 	loadLocalEnv();
+	// Engine MCP tools (save_lead, enrich_lead) run serial re-fetches and
+	// upserts that can take minutes; the SDK's default per-call timeout kills
+	// them and poisons the shared transport ("Stream closed").
+	process.env.MCP_TOOL_TIMEOUT ??= "600000";
+	process.env.MCP_TIMEOUT ??= "120000";
 	const [runStore, engine, kylon, schemas] = await Promise.all([
 		import("@/lib/run-store"),
 		import("@/lib/engine"),

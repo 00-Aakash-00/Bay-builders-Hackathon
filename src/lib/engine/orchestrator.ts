@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import {
 	type AgentDefinition,
+	type AnyZodRawShape,
 	createSdkMcpServer,
 	type HookCallback,
 	query,
 	type SDKMessage,
 	type SDKUserMessage,
+	type SdkMcpToolDefinition,
 	tool,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
@@ -705,7 +707,7 @@ const agentDefinitions = {
 		description: "Create two or three falsifiable ICP hypotheses from a brief.",
 		prompt:
 			"Return only a JSON array of 2-3 ICPHypothesis objects. Avoid protected traits and include disqualifiers and audience vocabulary.",
-		model: "claude-opus-4-8",
+		model: "claude-sonnet-5",
 		tools: [],
 		maxTurns: 6,
 	},
@@ -713,7 +715,7 @@ const agentDefinitions = {
 		description: "Turn one confirmed ICP into a five-bucket QueryPlan.",
 		prompt:
 			"Return only one QueryPlan JSON object covering demand, pain, workaround, switching, and timing across public channels.",
-		model: "claude-opus-4-8",
+		model: "claude-sonnet-5",
 		tools: [],
 		maxTurns: 6,
 	},
@@ -738,7 +740,7 @@ const agentDefinitions = {
 		description: "Adversarially verify one extracted public signal.",
 		prompt:
 			"Default REJECT. Independently use web_extract, check exact quote support, authorship, and recency, then return only one Verdict JSON object. Never rely on search snippets alone.",
-		model: "claude-opus-4-8",
+		model: "claude-sonnet-5",
 		tools: [mcpTool("web_extract"), mcpTool("memory_recall")],
 		maxTurns: 8,
 	},
@@ -783,7 +785,7 @@ Flow:
 1. Delegate to intake-analyst. Emit a stage_change INTAKE containing domain and the strict ProductBrief.
 2. Delegate to icp-architect. Emit stage_change ICP_CONFIRM containing domain, brief, and 2-3 strict ICP hypotheses. Stop after that tool call and wait for the founder's selection in the next user message.
 3. Delegate to hunt-strategist. Emit STRATEGY with a strict QueryPlan, then HUNTING with the same plan.
-4. Run hunter agents in batches of at most four. For each typed candidate emit signal_found, then use extractor, memory_recall, verifier, enricher, scorer, and composer. Reject anything unsupported with signal_rejected. Only call save_lead after verifier re-fetches the URL and supports the quote. save_lead enforces evidence again.
+4. Run hunter agents in batches of at most four. STREAM RESULTS: emit signal_found the moment each candidate is discovered — never hold candidates back. Then pipeline each candidate INDIVIDUALLY through extractor, memory_recall, verifier, enricher, scorer, and composer, and call save_lead IMMEDIATELY when that single candidate passes verification — never batch verified leads for a later save. The founder is watching live; every found/rejected/verified moment must appear in real time. Reject anything unsupported with signal_rejected as soon as it fails. Only call save_lead after verifier re-fetches the URL and supports the quote. save_lead enforces evidence again.
 5. Continue until quota, no viable signals, or budget floor. Call budget_read between waves. Emit visible strategy_pivot events when changing lanes.
 6. Emit stage_change REVIEW. End with structured status REVIEW and the actual verified lead count.
 
@@ -1014,19 +1016,45 @@ function agentCompletionHook(
 	};
 }
 
+function guardTool<S extends AnyZodRawShape>(
+	def: SdkMcpToolDefinition<S>,
+): SdkMcpToolDefinition<S> {
+	return {
+		...def,
+		handler: async (args, extra) => {
+			try {
+				return await def.handler(args, extra);
+			} catch (error) {
+				console.error(`[engine] tool ${def.name} failed`, error);
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `TOOL_ERROR: ${error instanceof Error ? error.message : String(error)}`,
+						},
+					],
+					isError: true,
+				};
+			}
+		},
+	};
+}
+
 async function executeQuery(
 	context: RunContext,
 	prompt: string | AsyncIterable<SDKUserMessage>,
 	agents: Record<string, AgentDefinition>,
 	maxTurns: number,
-	model: "claude-opus-4-8" | "claude-sonnet-5",
+	model: "claude-sonnet-5" | "claude-haiku-4-5",
 	agentPolicy?: AgentInvocationPolicy,
 ): Promise<void> {
 	const mcpServer = createSdkMcpServer({
 		name: "customerzero",
 		version: "1.0.0",
 		alwaysLoad: true,
-		tools: createTools(context),
+		tools: createTools(context).map((def) =>
+			guardTool(def as unknown as SdkMcpToolDefinition<AnyZodRawShape>),
+		) as unknown as ReturnType<typeof createTools>,
 	});
 	const allowedMcpTools = [
 		"web_search",
@@ -1076,6 +1104,10 @@ async function executeQuery(
 				: undefined,
 			persistSession: true,
 			forwardSubagentText: true,
+			stderr: (data: string) => {
+				const text = String(data).trim();
+				if (text) console.error("[claude-stderr]", text.slice(0, 600));
+			},
 			outputFormat: {
 				type: "json_schema",
 				schema: z.toJSONSchema(CompletionSchema, { target: "draft-7" }),
@@ -1083,10 +1115,18 @@ async function executeQuery(
 		},
 	});
 
-	for await (const message of stream) {
-		routeSdkMessage(context, message);
-		if (message.type === "result" && message.subtype !== "success") {
-			failure = message.errors.join("; ") || message.subtype;
+	try {
+		for await (const message of stream) {
+			routeSdkMessage(context, message);
+			if (message.type === "result" && message.subtype !== "success") {
+				failure = message.errors.join("; ") || message.subtype;
+			}
+		}
+	} finally {
+		try {
+			await stream.close?.();
+		} catch {
+			// already terminated
 		}
 	}
 	if (failure) throw new Error(failure);
@@ -1132,7 +1172,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<void> {
 			gatedOrchestrationPrompt(context),
 			agentDefinitions,
 			250,
-			"claude-opus-4-8",
+			"claude-sonnet-5",
 			{ maxConcurrent: { hunter: 4 } },
 		);
 	} catch (error) {
@@ -1177,7 +1217,7 @@ Use the Agent tool for specialists and only CustomerZero MCP tools for external 
 ${eventPayloadReference}`,
 			agentDefinitions,
 			250,
-			"claude-opus-4-8",
+			"claude-sonnet-5",
 			{ maxConcurrent: { hunter: 4 } },
 		);
 	}
