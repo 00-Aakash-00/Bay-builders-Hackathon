@@ -11,6 +11,17 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - **Package Manager:** Always use `pnpm` for package management.
 - Any instruction that would otherwise reference `CLAUDE.md` should be treated as a reference to `AGENTS.md`.
 
+## Skills
+
+Reusable skills live in `.agents/skills/<name>/SKILL.md` (symlinked into `.claude/skills/`, tracked in `skills-lock.json`; manage with `npx skills`). When a trigger below matches the task, read the skill file and follow it. In Claude Code they are also invocable as `/<name>`; ones marked *(user-invoked)* only run when the user asks.
+
+- **grilling** — Interview the user relentlessly, one question at a time, to stress-test a plan, decision, or idea until shared understanding is reached. Use when the user wants their thinking challenged or says "grill". Do not act until understanding is confirmed.
+- **grill-me** *(user-invoked)* — Shortcut that runs a `/grilling` session.
+- **tdd** — Red → green test-driven development. Tests verify behavior at pre-agreed public seams, one vertical slice at a time; refactoring belongs to review, not the loop. Use for test-first feature work or bug fixes.
+- **implement** *(user-invoked)* — Implement a spec or set of tickets end-to-end: `/tdd` at pre-agreed seams, typecheck regularly, full test suite once at the end, then `/code-review` and commit to the current branch.
+- **emil-design-eng** — Emil Kowalski's design-engineering philosophy: UI polish, component design, animation decisions, and the invisible details that make software feel great. Consult whenever building or refining UI.
+- **review-animations** *(user-invoked)* — Review animation/motion code against a strict craft bar (justified motion, ease-out curves, sub-300ms durations, correct transform-origin, interruptibility, GPU-only properties, reduced motion). Defaults to flagging; approval is earned.
+
 ## Workflow Orchestration
 
 ### 1. Plan Node Default
