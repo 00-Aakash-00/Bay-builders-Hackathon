@@ -36,6 +36,7 @@ export default async function RunPage({
 	return (
 		<RunDashboard
 			runId={run.id}
+			mode={run.mode}
 			initialDomain={run.domain}
 			initialState={run.state}
 			createdAt={run.createdAt}

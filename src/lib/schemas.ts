@@ -179,6 +179,18 @@ export const EnrichmentSchema = z
 					.strict(),
 			)
 			.optional(),
+		datapoints: z
+			.array(
+				z
+					.object({
+						label: z.string().min(1),
+						value: z.string().min(1),
+						kind: z.enum(["text", "number", "date", "url"]),
+						provenanceUrl: UrlSchema,
+					})
+					.strict(),
+			)
+			.optional(),
 		personContext: z.string().min(1).optional(),
 		channel: z
 			.object({

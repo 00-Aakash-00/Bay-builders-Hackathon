@@ -76,8 +76,10 @@ type LeadCardProps = {
 export function LeadCard({ lead, draft, isSent, onApprove }: LeadCardProps) {
 	const company = lead.enrichment.company ?? lead.signal.company;
 	const contacts = lead.enrichment.contacts ?? [];
+	const datapoints = lead.enrichment.datapoints ?? [];
 	const personContext = lead.enrichment.personContext;
-	const hasContactContext = contacts.length > 0 || Boolean(personContext);
+	const hasContactContext =
+		contacts.length > 0 || datapoints.length > 0 || Boolean(personContext);
 	const [copiedContactIndex, setCopiedContactIndex] = useState<number | null>(
 		null,
 	);
@@ -225,6 +227,38 @@ export function LeadCard({ lead, draft, isSent, onApprove }: LeadCardProps) {
 								? `${contacts[copiedContactIndex]?.value} copied`
 								: ""}
 						</span>
+						{datapoints.length > 0 ? (
+							<dl className="mt-16 divide-y divide-mist border-mist border-y">
+								{datapoints.map((datapoint) => (
+									<div
+										key={`${datapoint.label}-${datapoint.value}`}
+										className="flex min-w-0 items-baseline gap-8 py-8"
+									>
+										<dt className="shrink-0 text-caption text-steel uppercase">
+											{datapoint.label}
+										</dt>
+										<span
+											aria-hidden="true"
+											className="text-caption text-steel"
+										>
+											·
+										</span>
+										<dd className="min-w-0 flex-1 break-words text-body-sm text-obsidian">
+											{datapoint.value}
+										</dd>
+										<a
+											href={datapoint.provenanceUrl}
+											target="_blank"
+											rel="noreferrer"
+											aria-label={`View provenance for ${datapoint.label}`}
+											className="shrink-0 text-caption text-steel underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ash"
+										>
+											↗
+										</a>
+									</div>
+								))}
+							</dl>
+						) : null}
 						{personContext ? (
 							<p className="mt-16 text-body-sm text-iron">{personContext}</p>
 						) : null}

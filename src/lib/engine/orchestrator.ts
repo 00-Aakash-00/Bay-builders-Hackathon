@@ -26,6 +26,7 @@ import {
 	type RunEvent,
 	RunEventSchema,
 } from "@/lib/schemas";
+import { enrichLead } from "./enrich";
 import { quoteMatchScore } from "./evidence";
 import { postToRoom } from "./tools/band";
 import {
@@ -561,6 +562,17 @@ function createTools(context: RunContext) {
 			},
 		),
 		tool(
+			"enrich_lead",
+			"Search public sources for cited lead contacts and independent enrichment datapoints. Returned values are the only allowed source of lead datapoints.",
+			{
+				name: z.string().min(1),
+				company: z.string().min(1).optional(),
+				signalUrl: z.string().url(),
+				channelHint: z.string().min(1).optional(),
+			},
+			async (args) => jsonResult(await enrichLead(args, context.runId)),
+		),
+		tool(
 			"save_lead",
 			"Validate and save one fully composed lead. This independently re-fetches and quote-matches evidence; it is the only path that can emit a verified lead.",
 			{
@@ -687,9 +699,13 @@ const agentDefinitions = {
 	enricher: {
 		description: "Find minimal public business context and a natural channel.",
 		prompt:
-			"Use public pages only. Return one Enrichment JSON object. Never guess emails or infer protected traits.",
+			"Use public pages only. You MUST call enrich_lead and merge its returned contacts and datapoints unchanged into the Lead enrichment before save_lead. The LLM may not invent or alter datapoints; only tool output is allowed. Return one Enrichment JSON object. Never guess emails or infer protected traits.",
 		model: "claude-sonnet-5",
-		tools: [mcpTool("web_search"), mcpTool("web_extract")],
+		tools: [
+			mcpTool("web_search"),
+			mcpTool("web_extract"),
+			mcpTool("enrich_lead"),
+		],
 		maxTurns: 8,
 	},
 	scorer: {
@@ -969,6 +985,7 @@ async function executeQuery(
 		"web_extract",
 		"memory_recall",
 		"memory_add",
+		"enrich_lead",
 		"save_lead",
 		"emit_event",
 		"budget_read",

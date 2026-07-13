@@ -44,6 +44,7 @@ type DashboardAction = { type: "event"; event: RunEvent };
 
 type RunDashboardProps = {
 	runId: string;
+	mode: "live" | "demo";
 	initialDomain: string;
 	initialState: RunState;
 	createdAt: string;
@@ -166,12 +167,14 @@ function ElapsedTime({ createdAt }: { createdAt: string }) {
 function RunHeader({
 	domain,
 	runState,
+	mode,
 	createdAt,
 	budget,
 	connection,
 }: {
 	domain: string;
 	runState: RunState;
+	mode: "live" | "demo";
 	createdAt: string;
 	budget: { spent: number; total: number };
 	connection: "connecting" | "live" | "reconnecting";
@@ -192,6 +195,11 @@ function RunHeader({
 					<span className="rounded-sm bg-badge-slate px-8 py-8 text-caption text-white">
 						{runState.replaceAll("_", " ")}
 					</span>
+					{mode === "demo" ? (
+						<span className="rounded-sm border border-mist bg-cloud px-8 py-8 text-caption text-iron">
+							demo data
+						</span>
+					) : null}
 				</div>
 			</div>
 
@@ -245,6 +253,7 @@ function RunHeader({
 
 export function RunDashboard({
 	runId,
+	mode,
 	initialDomain,
 	initialState,
 	createdAt,
@@ -357,6 +366,7 @@ export function RunDashboard({
 			<RunHeader
 				domain={state.domain}
 				runState={state.runState}
+				mode={mode}
 				createdAt={createdAt}
 				budget={state.budget}
 				connection={connection}

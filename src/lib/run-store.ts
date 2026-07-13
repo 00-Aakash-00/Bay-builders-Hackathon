@@ -1,9 +1,12 @@
+import { fetchRealBrief } from "@/lib/engine/intake";
 import { createMockRunScript, createRadarLead } from "@/lib/mock/run-script";
 import {
+	type ICPHypothesis,
 	type Lead,
 	LeadSchema,
 	type OutreachDraft,
 	OutreachDraftSchema,
+	type ProductBrief,
 	type RunEvent,
 	RunEventSchema,
 	type RunState,
@@ -21,6 +24,7 @@ export interface RunRecord {
 	domain: string;
 	depth: RunDepth;
 	state: RunState;
+	mode: "live" | "demo";
 	createdAt: string;
 	events: RunEvent[];
 	budget: {
@@ -165,16 +169,147 @@ export function subscribe(
 	};
 }
 
+function stated(value: string): boolean {
+	return !/not stated on site/iu.test(value);
+}
+
+function briefSeeds(brief: ProductBrief): {
+	personas: [string, string];
+	industry: string;
+	vocabulary: string[];
+} {
+	const text = [brief.product, brief.buyer, brief.user, brief.topUseCase].join(
+		" ",
+	);
+	let personas: [string, string];
+	let industry = "Industry not stated on site";
+	if (/\b(?:venture capital|VC|funds?|LPs?)\b/iu.test(text)) {
+		personas = ["VC fund partners", "VC fund operations teams"];
+		industry = "Venture capital";
+	} else if (
+		/\b(?:developer|engineering|agent traces?|models?|repository|repo)\b/iu.test(
+			text,
+		)
+	) {
+		personas = [
+			"AI agent developers",
+			"Engineering teams managing model costs",
+		];
+		industry = "AI and developer tools";
+	} else if (/\bfounders?\b/iu.test(text)) {
+		personas = ["Founders", "Founder-led growth teams"];
+		industry = /\b(?:SaaS|software)\b/iu.test(text) ? "B2B software" : industry;
+	} else {
+		const audiences = [brief.user, brief.buyer].filter(stated);
+		personas = [
+			audiences[0] ?? "Audience not stated on site",
+			audiences[1] ?? audiences[0] ?? "Audience not stated on site",
+		];
+	}
+
+	const patterns = [
+		/\bventure capital\b/iu,
+		/\bVC funds?\b/iu,
+		/\bfund partners?\b/iu,
+		/\bLP reports?\b/iu,
+		/\bagent traces?\b/iu,
+		/\bcheaper models?\b/iu,
+		/\bmodel costs?\b/iu,
+		/\bevidence\b/iu,
+		/\bindie founders?\b/iu,
+		/\bfounder-led\b/iu,
+	];
+	const vocabulary = patterns.flatMap((pattern) => text.match(pattern) ?? []);
+	for (const word of text.match(/[A-Za-z][A-Za-z-]{4,}/gu) ?? []) {
+		const normalized = word.toLocaleLowerCase("en-US");
+		if (
+			!["stated", "their", "which", "with", "your"].includes(normalized) &&
+			!vocabulary.some(
+				(value) => value.toLocaleLowerCase("en-US") === normalized,
+			)
+		) {
+			vocabulary.push(word);
+		}
+		if (vocabulary.length === 4) break;
+	}
+	const fallback = [
+		brief.buyer,
+		brief.user,
+		brief.outcome,
+		brief.topUseCase,
+		brief.product,
+		brief.domain,
+	].filter(stated);
+	while (vocabulary.length < 4) {
+		vocabulary.push(
+			fallback[vocabulary.length % fallback.length] ?? brief.product,
+		);
+	}
+	return { personas, industry, vocabulary: vocabulary.slice(0, 4) };
+}
+
+function briefIcps(
+	brief: ProductBrief,
+	fixtureIcps: ICPHypothesis[],
+): ICPHypothesis[] {
+	const seeds = briefSeeds(brief);
+	const useCase = stated(brief.topUseCase) ? brief.topUseCase : brief.product;
+	const outcome = stated(brief.outcome) ? brief.outcome : brief.product;
+	return fixtureIcps.map((icp, index) => ({
+		...icp,
+		persona: seeds.personas[index] ?? seeds.personas[0],
+		industry: seeds.industry,
+		painTriggers: [
+			`Needs the workflow described by: ${brief.product}`,
+			`Still handles “${useCase}” manually`,
+			"Uses fragmented tools for the product's core job",
+		],
+		positiveSignals: [
+			`Publicly seeking a solution matching: ${brief.product}`,
+			`Actively replacing tools used for “${useCase}”`,
+			`Owns the outcome: ${outcome}`,
+		],
+		vocabulary:
+			index === 0
+				? seeds.vocabulary
+				: [...seeds.vocabulary.slice(1), seeds.vocabulary[0]],
+	}));
+}
+
+function withRealBrief(event: RunEvent, brief: ProductBrief): RunEvent {
+	if (event.type !== "stage_change" || !event.payload.brief) return event;
+	return RunEventSchema.parse({
+		...event,
+		payload: {
+			...event.payload,
+			brief,
+			...(event.payload.icps
+				? { icps: briefIcps(brief, event.payload.icps) }
+				: {}),
+		},
+	});
+}
+
 export async function driveMockRun(runId: string): Promise<void> {
 	const run = runs.get(runId);
 	if (!run) {
 		throw new Error(`Unknown run: ${runId}`);
+	}
+	run.mode = "demo";
+	const briefingStartedAt = Date.now();
+	let realBrief: ProductBrief | undefined;
+	try {
+		realBrief = await fetchRealBrief(run.domain);
+	} catch {
+		realBrief = undefined;
 	}
 	const steps = createMockRunScript({
 		runId: run.id,
 		domain: run.domain,
 		startedAt: run.createdAt,
 	});
+	let fetchFailureReported = false;
+	let firstEvent = true;
 
 	for (const step of steps) {
 		if (step.kind === "pause") {
@@ -182,12 +317,40 @@ export async function driveMockRun(runId: string): Promise<void> {
 			continue;
 		}
 
-		await new Promise((resolve) => setTimeout(resolve, step.delayMs));
-		append(run.id, step.event);
+		const delayMs = firstEvent
+			? Math.max(0, step.delayMs - (Date.now() - briefingStartedAt))
+			: step.delayMs;
+		await new Promise((resolve) => setTimeout(resolve, delayMs));
+		firstEvent = false;
+		const event = realBrief ? withRealBrief(step.event, realBrief) : step.event;
+		append(run.id, event);
+		if (
+			!realBrief &&
+			!fetchFailureReported &&
+			event.type === "stage_change" &&
+			event.payload.state === "INTAKE"
+		) {
+			fetchFailureReported = true;
+			append(run.id, {
+				runId: run.id,
+				ts: new Date().toISOString(),
+				seq: nextSequence(run),
+				lane: "system",
+				type: "agent_started",
+				payload: {
+					agent: "intake-analyst",
+					message: "site fetch failed — using demo brief",
+				},
+			});
+		}
 	}
 }
 
-function createStoredRun(domain: string, depth: RunDepth): StoredRun {
+function createStoredRun(
+	domain: string,
+	depth: RunDepth,
+	mode: "live" | "demo",
+): StoredRun {
 	const id = crypto.randomUUID();
 	const createdAt = new Date().toISOString();
 	const run: StoredRun = {
@@ -195,6 +358,7 @@ function createStoredRun(domain: string, depth: RunDepth): StoredRun {
 		domain,
 		depth,
 		state: "INTAKE",
+		mode,
 		createdAt,
 		events: [],
 		budget: { spent: 0, total: 50 },
@@ -212,11 +376,11 @@ export function createEngineRun(
 	domain: string,
 	depth: RunDepth = 10,
 ): RunRecord {
-	return createStoredRun(domain, depth);
+	return createStoredRun(domain, depth, "live");
 }
 
 export function createRun(domain: string, depth: RunDepth = 10): RunRecord {
-	const run = createStoredRun(domain, depth);
+	const run = createStoredRun(domain, depth, "demo");
 	void driveMockRun(run.id).catch((error: unknown) => {
 		append(run.id, {
 			runId: run.id,
