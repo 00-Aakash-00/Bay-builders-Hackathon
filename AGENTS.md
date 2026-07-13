@@ -21,6 +21,7 @@ Reusable skills live in `.agents/skills/<name>/SKILL.md` (symlinked into `.claud
 - **implement** *(user-invoked)* — Implement a spec or set of tickets end-to-end: `/tdd` at pre-agreed seams, typecheck regularly, full test suite once at the end, then `/code-review` and commit to the current branch.
 - **emil-design-eng** — Emil Kowalski's design-engineering philosophy: UI polish, component design, animation decisions, and the invisible details that make software feel great. Consult whenever building or refining UI.
 - **review-animations** *(user-invoked)* — Review animation/motion code against a strict craft bar (justified motion, ease-out curves, sub-300ms durations, correct transform-origin, interruptibility, GPU-only properties, reduced motion). Defaults to flagging; approval is earned.
+- **codex-house-rules** — Operating rules for Codex agents working in this repo (read-docs-first list, scope discipline, verification loop, principles). Every Codex agent must read and obey it before changing anything.
 
 ## Workflow Orchestration
 

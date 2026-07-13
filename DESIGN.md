@@ -115,3 +115,29 @@ The scale is 8px-based: 8, 16, 24, 32, 40, 48, 56, 72, 80 — as pixel values.
 - `rounded-sm` → 2px. Corners are sharp; use `rounded-sm` as the default.
 - `shadow-sm` → subtle 1-layer shadow for resting elements.
 - `shadow-sm-2` → 2-layer shadow for elevated elements (popovers, cards on hover).
+
+## Motion
+
+Easing tokens (in `@theme`, use as `ease-out-strong` etc.):
+
+| Utility | Curve | Use |
+|---|---|---|
+| `ease-out-strong` | `cubic-bezier(0.23, 1, 0.32, 1)` | Entering/exiting elements, default for UI |
+| `ease-in-out-strong` | `cubic-bezier(0.77, 0, 0.175, 1)` | On-screen movement/morphs |
+| `ease-drawer` | `cubic-bezier(0.32, 0.72, 0, 1)` | Drawers/sheets |
+
+Rules (non-negotiable, from the repo's design-engineering bar):
+
+- **Durations:** button press 100–160ms · tooltips 125–200ms · dropdowns 150–250ms · modals/drawers 200–500ms. UI stays **under 300ms**; only marketing/explanatory motion may run longer.
+- **Never `ease-in`** on UI. Entering/exiting elements use `ease-out-strong`.
+- **Animate `transform` and `opacity` only.** Never width/height/margin/top for motion.
+- **Never `transition: all`** — name the properties.
+- **Never enter from `scale(0)`** — start `scale(0.95–0.97)` + `opacity: 0`.
+- **Pressables:** `active:scale-[0.97]` with `transition: transform 160ms`.
+- **Popovers scale from their trigger** (`transform-origin` at trigger); modals stay centered.
+- **No animation on keyboard-initiated or 100×/day actions.**
+- **Interruptible:** CSS transitions (retargetable), not keyframes, for anything rapidly triggered.
+- **Stagger** list entrances 30–80ms/item; never block interaction on stagger.
+- **Asymmetric timing:** deliberate/press = slower; system response/exit = snappier.
+- **Accessibility:** honor `prefers-reduced-motion` (keep opacity/color, drop movement); gate hover motion behind `@media (hover: hover) and (pointer: fine)`.
+- Entrances via `@starting-style` where possible; `data-mounted` fallback otherwise.
